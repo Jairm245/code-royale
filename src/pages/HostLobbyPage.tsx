@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   useNavigate,
   useParams,
@@ -16,6 +16,13 @@ import {
 import {
   api,
 } from "../../convex/_generated/api";
+
+import { Icon, Wordmark } from "../components/Icon";
+import { Curtain, Dots } from "../components/ShowParts";
+import { SoundToggle } from "../components/SoundToggle";
+import { playSfx, startMusic, unlockAudio } from "../utils/sfx";
+
+const MAX_PLAYERS = 8;
 
 function HostLobbyPage() {
   const { code } =
@@ -69,31 +76,50 @@ function HostLobbyPage() {
     navigate,
   ]);
 
+  /* lobby music, and a chime each time a contestant joins */
+  useEffect(() => {
+    startMusic("lobby");
+  }, []);
+
+  const seenPlayersRef =
+    useRef<number | null>(null);
+
+  useEffect(() => {
+    if (players === undefined) {
+      return;
+    }
+
+    if (
+      seenPlayersRef.current !== null &&
+      players.length >
+        seenPlayersRef.current
+    ) {
+      void playSfx("join");
+    }
+
+    seenPlayersRef.current =
+      players.length;
+  }, [players]);
+
   if (
     room === undefined ||
     players === undefined
   ) {
     return (
-      <main className="host-game-shell">
-        <div className="host-loading">
-          <div className="host-loading-crown">
-            👑
-          </div>
-
-          <h2>
-            Loading lobby...
-          </h2>
-        </div>
+      <main className="shell shell-host">
+        <Curtain icon="crown" title="Opening the studio">
+          <Dots />
+        </Curtain>
       </main>
     );
   }
 
   if (room === null) {
     return (
-      <main className="host-game-shell">
-        <h2>
-          Room not found.
-        </h2>
+      <main className="shell shell-host">
+        <Curtain icon="search" title="Room not found">
+          <a className="btn btn-gold" href="/create">Create a new room</a>
+        </Curtain>
       </main>
     );
   }
@@ -112,6 +138,9 @@ function HostLobbyPage() {
       return;
     }
 
+    /* the click is the user gesture browsers need for audio */
+    await unlockAudio();
+
     try {
       await startGame({
         roomId:
@@ -125,174 +154,94 @@ function HostLobbyPage() {
     }
   }
 
+  const seats =
+    Array.from(
+      { length: MAX_PLAYERS },
+      (_, index) =>
+        players[index]
+    );
+
   return (
-    <main className="host-game-shell">
-      <header className="host-topbar">
-        <div className="host-brand">
-          <span>
-            👑
-          </span>
-
-          CODE ROYALE
-        </div>
-
-        <div className="host-room-chip">
-          ROOM {room.code}
+    <main className="shell shell-host">
+      <header className="topbar">
+        <Wordmark />
+        <span className="sign">Lobby</span>
+        <div className="topbar-right">
+          <SoundToggle />
         </div>
       </header>
 
-      <section className="lobby-game-layout">
-        <div className="lobby-main-card">
-          <div className="lobby-title-row">
+      <section className="lobby">
+        <div className="marquee">
+          <div className="marquee-inner lobby-join">
             <div>
-              <p className="host-eyebrow">
-                HOST LOBBY
-              </p>
+              <h1>Grab your phone</h1>
 
-              <h1>
-                Ready the arena
-              </h1>
+              <ol className="lobby-steps">
+                <li>Scan the code, or open <strong>{new URL(joinUrl).host}/join</strong></li>
+                <li>Enter the room code and your name</li>
+                <li>Wait for the host to start</li>
+              </ol>
 
-              <p>
-                Players can scan the QR code
-                or enter the room code.
-              </p>
-            </div>
-
-            <div className="lobby-live-chip">
-              ● LIVE
-            </div>
-          </div>
-
-          <div className="lobby-access-grid">
-            <div className="lobby-code-panel">
-              <p className="host-eyebrow">
-                ROOM CODE
-              </p>
-
-              <div className="lobby-big-code">
+              <div className="lobby-code" aria-label={`Room code ${room.code}`}>
                 {room.code}
               </div>
 
-              <p className="lobby-helper-text">
-                Enter this code on the join screen.
-              </p>
+              <div className="lobby-start">
+                <button
+                  type="button"
+                  className="btn btn-gold btn-lg"
+                  onClick={handleStart}
+                  disabled={players.length === 0}
+                >
+                  <Icon name="play" />
+                  Start the game
+                </button>
+
+                <span className="muted">
+                  {players.length === 0
+                    ? "Waiting for the first player"
+                    : `${players.length} of ${MAX_PLAYERS} seats filled`}
+                </span>
+              </div>
             </div>
 
-            <div className="lobby-qr-panel">
-              <QRCodeSVG
-                value={joinUrl}
-                size={210}
-                level="H"
-                includeMargin
-              />
-
-              <span>
-                Scan to join
-              </span>
+            <div className="lobby-qr">
+              <QRCodeSVG value={joinUrl} size={220} level="M" includeMargin={false} />
             </div>
           </div>
-
-          <button
-            className="lobby-battle-button"
-            onClick={
-              handleStart
-            }
-            disabled={
-              players.length === 0
-            }
-          >
-            <span>
-              Start Battle
-            </span>
-
-            <span>
-              →
-            </span>
-          </button>
-
-          {players.length ===
-            0 && (
-            <p className="lobby-disabled-hint">
-              Waiting for at least one player.
-            </p>
-          )}
         </div>
 
-        <aside className="host-live-panel">
-          <div className="host-panel-heading">
-            <span>
-              👥
-            </span>
-
-            <h2>
-              Players
-            </h2>
+        <aside className="panel">
+          <div className="panel-title">
+            Contestants
+            <small>{players.length}/{MAX_PLAYERS}</small>
           </div>
 
-          <div className="lobby-count-row">
-            <span>
-              Ready
-            </span>
-
-            <strong>
-              {players.length}
-            </strong>
-          </div>
-
-          {players.length >
-          0 ? (
-            <div className="host-leaderboard-list">
-              {players.map(
-                (
-                  player,
-                  index
-                ) => (
-                  <div
-                    className="host-leaderboard-row"
-                    key={
-                      player._id
-                    }
-                  >
-                    <div className="host-rank">
-                      {index +
-                        1}
-                    </div>
-
-                    <div className="host-player-info">
-                      <strong>
-                        {
-                          player.name
-                        }
-                      </strong>
-
-                      <span>
-                        Ready to play
-                      </span>
-                    </div>
-
-                    <div className="lobby-ready-indicator">
-                      ✓
-                    </div>
+          <div className="roster">
+            {seats.map((player, index) =>
+              player ? (
+                <div className="contestant" key={player._id}>
+                  <div className="contestant-rank">{index + 1}</div>
+                  <div className="contestant-name">
+                    <strong>{player.name}</strong>
+                    <span>Ready</span>
                   </div>
-                )
-              )}
-            </div>
-          ) : (
-            <div className="lobby-empty-state">
-              <div>
-                👀
-              </div>
-
-              <strong>
-                Waiting for players
-              </strong>
-
-              <span>
-                New players will appear here live.
-              </span>
-            </div>
-          )}
+                  <div className="status-dot status-dot-done">
+                    <Icon name="check" />
+                  </div>
+                </div>
+              ) : (
+                <div className="contestant seat-open" key={`open-${index}`}>
+                  <div className="contestant-rank">{index + 1}</div>
+                  <div className="contestant-name">
+                    <span>Open seat</span>
+                  </div>
+                  <span />
+                </div>
+              )
+            )}
+          </div>
         </aside>
       </section>
     </main>

@@ -7,6 +7,8 @@ import {
   v,
 } from "convex/values";
 
+export const MAX_PLAYERS = 8;
+
 export const joinRoom =
   mutation({
     args: {
@@ -37,6 +39,28 @@ export const joinRoom =
       if (!room) {
         throw new Error(
           "Room not found"
+        );
+      }
+
+      const playersInRoom =
+        await ctx.db
+          .query("players")
+          .withIndex(
+            "by_room",
+            (q) =>
+              q.eq(
+                "roomId",
+                room._id
+              )
+          )
+          .collect();
+
+      if (
+        playersInRoom.length >=
+        MAX_PLAYERS
+      ) {
+        throw new Error(
+          "This game is full (8 players max)"
         );
       }
 

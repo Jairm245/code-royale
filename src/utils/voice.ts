@@ -1,3 +1,6 @@
+import { toSpeakable } from "./speakable";
+import { setVoiceActive } from "./sfx";
+
 /* ========================================
    CODE ROYALE VOICE
 ======================================== */
@@ -186,6 +189,7 @@ function getPreferredVoice() {
 
 export function stopVoice() {
   speechSession += 1;
+  setVoiceActive(false);
 
   
 
@@ -218,6 +222,21 @@ export function speak(
     ) => void;
   }
 ) {
+  /* duck the music while the browser voice speaks */
+  const callerOptions = options;
+  setVoiceActive(true);
+  options = {
+    ...callerOptions,
+    onEnd: () => {
+      setVoiceActive(false);
+      callerOptions?.onEnd?.();
+    },
+    onError: (error?: string) => {
+      setVoiceActive(false);
+      callerOptions?.onError?.(error);
+    },
+  };
+
   if (
     !(
       "speechSynthesis" in
@@ -229,9 +248,12 @@ export function speak(
     return;
   }
 
+  /* say "equals", not "equals equals" */
   const chunks =
     splitSpeechIntoChunks(
-      text
+      toSpeakable(
+        text
+      )
     );
 
   if (

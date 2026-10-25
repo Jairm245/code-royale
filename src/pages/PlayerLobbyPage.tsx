@@ -20,6 +20,9 @@ import {
   api,
 } from "../../convex/_generated/api";
 
+import { Icon, Wordmark } from "../components/Icon";
+import { Curtain, Dots } from "../components/ShowParts";
+
 function PlayerLobbyPage() {
   const { code } =
     useParams();
@@ -126,130 +129,80 @@ function PlayerLobbyPage() {
     players === undefined
   ) {
     return (
-      <main className="player-game-shell">
-        <div className="player-loading">
-          <div className="loading-crown">
-            ⚡
-          </div>
-
-          <h2>
-            Joining lobby...
-          </h2>
-        </div>
+      <main className="shell shell-phone">
+        <Curtain icon="crown" title="Joining">
+          <Dots />
+        </Curtain>
       </main>
     );
   }
 
   if (room === null) {
     return (
-      <main className="player-game-shell">
-        <h2>
-          Room not found.
-        </h2>
+      <main className="shell shell-phone">
+        <Curtain icon="search" title="Room not found">
+          <p>Check the code on the host screen and join again.</p>
+          <a className="btn btn-gold" href="/join">Join a game</a>
+        </Curtain>
       </main>
     );
   }
 
-  if (!playerId) {
+  if (!playerId || !currentPlayer) {
     return (
-      <main className="player-game-shell">
-        <h2>
-          Player session not found.
-        </h2>
-
-        <p>
-          Please rejoin the room.
-        </p>
+      <main className="shell shell-phone">
+        <Curtain icon="users" title="Join again">
+          <p>This phone isn't in the game yet. Rejoin with the room code.</p>
+          <a className="btn btn-gold" href={`/join/${room.code}`}>Rejoin room {room.code}</a>
+        </Curtain>
       </main>
     );
   }
 
-  if (!currentPlayer) {
-    return (
-      <main className="player-game-shell">
-        <h2>
-          Player not found.
-        </h2>
-
-        <p>
-          Please rejoin the room.
-        </p>
-      </main>
-    );
-  }
+  const seat =
+    players.findIndex(
+      (player) =>
+        player._id ===
+        currentPlayer._id
+    ) + 1;
 
   return (
-    <main className="player-game-shell">
-      <header className="player-topbar">
-        <div>
-          <span className="topbar-logo">
-            👑
-          </span>
-
-          <strong>
-            CODE ROYALE
-          </strong>
-        </div>
-
-        <div className="score-chip">
-          ROOM {room.code}
-        </div>
+    <main className="shell shell-phone">
+      <header className="phone-head">
+        <Wordmark compact />
+        <span className="plate">
+          Room <strong>{room.code}</strong>
+        </span>
       </header>
 
-      <section className="player-lobby-card">
-        <div className="player-lobby-avatar">
-          {currentPlayer.name
-            .charAt(0)
-            .toUpperCase()}
+      <section className="lobby-card">
+        <div className="avatar">
+          {currentPlayer.name.charAt(0).toUpperCase()}
         </div>
 
-        <p className="eyebrow">
-          YOU&apos;RE READY
-        </p>
+        <h1>{currentPlayer.name}</h1>
 
-        <h1>
-          {currentPlayer.name}
-        </h1>
-
-        <div className="player-ready-badge">
-          ✓ READY
+        <div className="banner banner-good">
+          <Icon name="check" />
+          You're in. Watch the big screen.
         </div>
 
-        <p className="player-lobby-copy">
-          Waiting for the host to start the battle.
-        </p>
-
-        <div className="coach-thinking">
-          <span />
-          <span />
-          <span />
-        </div>
-
-        <div className="player-lobby-stats">
-          <div>
-            <span>
-              PLAYERS
-            </span>
-
-            <strong>
-              {players.length}
-            </strong>
+        <div className="facts">
+          <div className="fact">
+            <span>Your seat</span>
+            <strong>{seat}</strong>
           </div>
-
-          <div>
-            <span>
-              ROOM
-            </span>
-
-            <strong>
-              {room.code}
-            </strong>
+          <div className="fact">
+            <span>Players</span>
+            <strong>{players.length}/8</strong>
           </div>
         </div>
 
-        <div className="player-lobby-tip">
-          ⚡ Power-ups unlock during the battle.
-        </div>
+        <p className="muted">
+          The game starts when the host is ready. Questions are read aloud first, then you have 20 seconds to answer.
+        </p>
+
+        <Dots />
       </section>
     </main>
   );

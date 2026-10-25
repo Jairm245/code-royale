@@ -67,7 +67,6 @@ Examples:
 - efficiently tracking frequencies
 - implementing undo
 - BFS traversal
-- retrieving the smallest value repeatedly
 - detecting duplicates
 - mapping values to indexes
 
@@ -243,6 +242,81 @@ The focus should be understanding edge-case behavior.
    GENERATE QUESTION
 ======================================== */
 
+/* ========================================
+   DUPLICATE DETECTION
+======================================== */
+
+function tokens(text: string) {
+  return new Set(
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]/g, " ")
+      .split(/\s+/)
+      .filter((word) => word.length > 2)
+  );
+}
+
+function similarity(a: string, b: string) {
+  const left = tokens(a);
+  const right = tokens(b);
+
+  if (left.size === 0 || right.size === 0) {
+    return 0;
+  }
+
+  let shared = 0;
+
+  for (const word of left) {
+    if (right.has(word)) {
+      shared += 1;
+    }
+  }
+
+  return shared / Math.min(left.size, right.size);
+}
+
+function normalizeAnswer(text: string) {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function findDuplicate(
+  parsed: any,
+  previousQuestions: string[],
+  previousAnswers: string[],
+  type: string
+) {
+  if (
+    typeof parsed?.question !== "string" ||
+    !Array.isArray(parsed?.choices)
+  ) {
+    return undefined;
+  }
+
+  const repeated = previousQuestions.find(
+    (question) => similarity(parsed.question, question) >= 0.7
+  );
+
+  if (repeated) {
+    return `too similar to an earlier question ("${repeated.slice(0, 80)}")`;
+  }
+
+  /* bug hunts can legitimately share answers like "off-by-one" */
+  if (type === "data_structure" || type === "optimal_approach") {
+    const answer = String(parsed.choices[parsed.correctAnswer] ?? "");
+    const reused = previousAnswers.find(
+      (previous) => normalizeAnswer(previous) === normalizeAnswer(answer)
+    );
+
+    if (reused) {
+      return `the correct answer "${answer}" was already used this game`;
+    }
+  }
+
+  return undefined;
+}
+
 export const generateQuestion =
   action({
     args: {
@@ -267,6 +341,27 @@ export const generateQuestion =
           v.array(
             v.string()
           )
+        ),
+
+      /*
+        Correct answers already used this game,
+        e.g. "Min-heap". A new question must not
+        have the same correct answer.
+      */
+      previousAnswers:
+        v.optional(
+          v.array(
+            v.string()
+          )
+        ),
+
+      /*
+        The round's focus topic from the game's
+        shuffled topic plan (see questionRotation).
+      */
+      requestedTopic:
+        v.optional(
+          v.string()
         ),
     },
 
@@ -322,24 +417,55 @@ export const generateQuestion =
         args.previousQuestions ??
         [];
 
+      const previousAnswers =
+        args.previousAnswers ??
+        [];
+
       const previousText =
         previousQuestions.length >
-        0
+          0 ||
+        previousAnswers.length >
+          0
           ? `
-AVOID REPEATING THESE QUESTIONS OR VERY SIMILAR ONES:
-
+========================================
+ALREADY USED THIS GAME — DO NOT REPEAT
+========================================
 ${previousQuestions
-  .slice(-8)
+  .slice(-12)
   .map(
     (
       question,
       index
     ) =>
-      `${index + 1}. ${question}`
+      `Q${index + 1}. ${question}`
   )
   .join("\n")}
 
-Use a different problem setup, algorithm, or concept.
+Correct answers already used (your correct answer must be DIFFERENT from all of these):
+${previousAnswers
+  .slice(-12)
+  .map(
+    (answer) =>
+      `- ${answer}`
+  )
+  .join("\n") || "- none"}
+
+Do not reuse the same problem, scenario, code, or answer.
+`
+          : "";
+
+      const topicText =
+        args.requestedTopic
+          ? `
+========================================
+REQUIRED FOCUS TOPIC FOR THIS ROUND
+========================================
+${args.requestedTopic}
+
+The question MUST be about this topic. For data structure
+and optimal approach questions, the CORRECT answer is this
+structure/technique. For bug hunt and edge case questions,
+the code/problem is built around this topic.
 `
           : "";
 
@@ -372,6 +498,8 @@ ${getTypeInstructions(
   requestedType
 )}
 
+${topicText}
+
 ========================================
 DIFFICULTY
 ========================================
@@ -389,10 +517,8 @@ For example, avoid questions like:
 
 "What does a stack do?"
 
-Prefer questions like:
-
-"Which data structure lets us repeatedly retrieve the
-smallest remaining value efficiently?"
+Prefer questions that describe a concrete scenario and
+make the player choose between believable options.
 
 ========================================
 TOPICS
@@ -511,6 +637,19 @@ Return JSON only.
          OPENAI REQUEST
       ==================================== */
 
+      /*
+        Up to two attempts: if the first question
+        duplicates an earlier one (or reuses an earlier
+        correct answer), ask again with the reason.
+      */
+      let parsed: any;
+      let retryNote = "";
+
+      for (
+        let attempt = 0;
+        attempt < 2;
+        attempt += 1
+      ) {
       const completion =
         await openai
           .chat
@@ -540,7 +679,8 @@ Return valid JSON only.
                   "user",
 
                 content:
-                  prompt,
+                  prompt +
+                  retryNote,
               },
             ],
 
@@ -576,7 +716,6 @@ Return valid JSON only.
         );
       }
 
-      let parsed: any;
 
       try {
         parsed =
@@ -639,6 +778,29 @@ Return valid JSON only.
         throw new Error(
           "correctAnswer must be between 0 and 3."
         );
+      }
+
+
+        const duplicateReason =
+          findDuplicate(
+            parsed,
+            previousQuestions,
+            previousAnswers,
+            requestedType
+          );
+
+        if (
+          !duplicateReason ||
+          attempt === 1
+        ) {
+          break;
+        }
+
+        retryNote = `
+
+YOUR PREVIOUS ATTEMPT WAS REJECTED: ${duplicateReason}
+Write a completely different question.
+`;
       }
 
       /* ====================================

@@ -33,6 +33,17 @@ export default defineSchema({
       v.number()
     ),
 
+    /*
+      Answers unlock when the host finishes reading
+      the question, or at this time at the latest
+      (10 s after the round starts). The 20 s answer
+      timer runs from here, so questionEndsAt is
+      answersOpenAt + 20 s.
+    */
+    answersOpenAt: v.optional(
+      v.number()
+    ),
+
     explanationSummary: v.optional(
       v.string()
     ),

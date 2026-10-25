@@ -6,6 +6,20 @@ import {
   v,
 } from "convex/values";
 
+import {
+  detectConcept,
+  getReferencePack,
+  isLegalPointerMove,
+  renderPackForDirector,
+  type ConceptId,
+  type PointerState,
+} from "./referencePacks";
+
+import {
+  getEngineForKind,
+  type StructureVisual,
+} from "./structureEngines";
+
 /*
   Code Royale Animation Director
 
@@ -38,7 +52,55 @@ const ALLOWED_ACTIONS =
     "queue_dequeue",
     "show_complexity",
     "emphasize_result",
+    "heap_insert",
+    "heap_compare",
+    "heap_swap",
+    "heap_pop",
+    "heap_settle",
+    "bst_visit",
+    "bst_insert",
+    "bst_remove",
+    "bst_replace",
+    "bst_promote",
+    "bst_found",
+    "uf_visit",
+    "uf_root",
+    "uf_link",
+    "seg_visit",
+    "seg_set",
+    "fw_visit",
+    "fw_add",
+    "fw_update",
+    "trie_step",
+    "trie_create",
+    "trie_end",
+    "graph_frontier",
+    "graph_visit",
+    "graph_edge",
+    "graph_done",
+    "graph_dist",
+    "ll_insert",
+    "ll_remove",
+    "ll_reverse_step",
+    "ll_reverse_done",
+    "deque_push_front",
+    "deque_push_back",
+    "deque_pop_front",
+    "deque_pop_back",
   ]);
+
+/* Actions every concept may use on the right scene. */
+const UNIVERSAL_ACTIONS =
+  new Set([
+    "highlight_code",
+    "emphasize_result",
+  ]);
+
+type PlanContext = {
+  concept:
+    ConceptId | "unknown";
+  questionType?: string;
+};
 
 const STYLE_PROFILE = `
 CODE ROYALE VISUAL STYLE PROFILE
@@ -349,12 +411,564 @@ function sanitizeBeat(
   return beat;
 }
 
+/*
+  REFERENCE-PACK FILTER
+  Drops beats that the concept's pack does not
+  allow, and beats that break the concept's core
+  property (e.g. a sliding-window pointer moving
+  backward). Bug Hunt is code-driven and keeps
+  the generic vocabulary.
+*/
+function filterBeatsForConcept(
+  beats:
+    DirectorBeat[],
+
+  scene:
+    SceneInput,
+
+  context:
+    PlanContext
+) {
+  const isBugHunt =
+    context.questionType ===
+    "bug_hunt";
+
+  const isComplexity =
+    context.questionType ===
+    "complexity";
+
+  const pack =
+    isBugHunt
+      ? undefined
+      : getReferencePack(
+          context.concept
+        );
+
+  const allowed =
+    pack
+      ? new Set([
+          ...pack.directorActions,
+          ...UNIVERSAL_ACTIONS,
+        ])
+      : undefined;
+
+  const pointerState:
+    PointerState = {};
+
+  for (
+    const pointer
+    of scene.visual
+      ?.pointers ??
+    []
+  ) {
+    pointerState[
+      pointer.label
+    ] =
+      pointer.index;
+  }
+
+  const maxIndex =
+    Math.max(
+      0,
+      (
+        scene.visual
+          ?.values
+          ?.length ??
+        1
+      ) - 1
+    );
+
+  return beats.filter(
+    (beat) => {
+      /*
+        Complexity is a label on top of the
+        structure, never its own beat, unless the
+        question is about complexity.
+      */
+      if (
+        beat.action ===
+          "show_complexity" &&
+        !isComplexity
+      ) {
+        return false;
+      }
+
+      if (
+        beat.action ===
+          "scan_code" &&
+        !isBugHunt
+      ) {
+        return false;
+      }
+
+      if (
+        beat.action ===
+          "highlight_code" &&
+        !scene.code
+      ) {
+        return false;
+      }
+
+      if (
+        allowed &&
+        !allowed.has(
+          beat.action
+        ) &&
+        !(
+          isComplexity &&
+          beat.action ===
+            "show_complexity"
+        )
+      ) {
+        return false;
+      }
+
+      if (
+        beat.action ===
+        "move_pointer"
+      ) {
+        if (
+          !beat.label ||
+          beat.toIndex ===
+            undefined ||
+          beat.toIndex >
+            maxIndex
+        ) {
+          return false;
+        }
+
+        if (
+          !isLegalPointerMove(
+            context.concept,
+            pointerState,
+            beat.label,
+            beat.toIndex
+          )
+        ) {
+          return false;
+        }
+
+        pointerState[
+          beat.label
+        ] =
+          beat.toIndex;
+      }
+
+      return true;
+    }
+  );
+}
+
+/*
+  ENGINE SCENES (heap, BST, trie, graph, union-find,
+  segment tree, Fenwick, linked list, queue/deque):
+  the event list is computed by the structure engine,
+  so every step is correct by construction. The model
+  only contributes TIMING: its beats for that engine
+  are reused in order as cues, and the remaining
+  events are spread over the rest of the narration.
+*/
+function buildEngineBeats(
+  scene:
+    SceneInput,
+
+  directorBeats:
+    DirectorBeat[],
+
+  engine:
+    NonNullable<
+      ReturnType<
+        typeof getEngineForKind
+      >
+    >
+): DirectorBeat[] {
+  const engineActions =
+    new Set(
+      engine.actions
+    );
+
+  const { events } =
+    engine.plan(
+      scene.visual as StructureVisual
+    );
+
+  const otherBeats =
+    directorBeats.filter(
+      (beat) =>
+        !engineActions.has(
+          beat.action
+        )
+    );
+
+  if (
+    events.length ===
+      0 &&
+    engine.replay
+  ) {
+    /*
+      No parseable operation, but this structure can
+      verify the Director's own beats (queue/deque):
+      keep them, corrected to be legal.
+    */
+    const replayed =
+      engine.replay(
+        scene.visual as StructureVisual,
+        directorBeats
+      ) as DirectorBeat[];
+
+    if (
+      replayed.length >
+      0
+    ) {
+      return [
+        ...replayed,
+        ...otherBeats.slice(
+          0,
+          1
+        ),
+      ].sort(
+        (a, b) =>
+          a.at - b.at
+      );
+    }
+  }
+
+  if (
+    events.length ===
+    0
+  ) {
+    /*
+      Structure / takeaway scene: keep it static.
+      One restrained engine beat (a focus) is fine.
+    */
+    const focus =
+      directorBeats.find(
+        (beat) =>
+          beat.action ===
+          "focus_index"
+      );
+
+    return [
+      ...(focus
+        ? [focus]
+        : []),
+      ...otherBeats,
+    ]
+      .slice(0, 3)
+      .sort(
+        (a, b) =>
+          a.at - b.at
+      );
+  }
+
+  const timing =
+    directorBeats
+      .filter(
+        (beat) =>
+          engineActions.has(
+            beat.action
+          )
+      )
+      .sort(
+        (a, b) =>
+          a.at - b.at
+      );
+
+  /*
+    The first N engine events reuse the model's N
+    cues in order; any remaining events are spread
+    evenly between the last cue and the end of the
+    narration so they never pile up.
+  */
+  const timedCount =
+    Math.min(
+      timing.length,
+      events.length
+    );
+
+  const lastTimedAt =
+    timedCount > 0
+      ? timing[
+          timedCount - 1
+        ].at
+      : 0.12;
+
+  const untimedCount =
+    events.length -
+    timedCount;
+
+  const engineBeats:
+    DirectorBeat[] =
+    events.map(
+      (
+        event,
+        index
+      ) => {
+        const timed =
+          index <
+          timedCount
+            ? timing[index]
+            : undefined;
+
+        /*
+          No cues at all: spread every event from
+          0.12 to 0.92. Otherwise spread the
+          leftovers after the last cue.
+        */
+        const spreadAt =
+          timedCount === 0
+            ? 0.12 +
+              (0.8 * index) /
+                Math.max(
+                  1,
+                  events.length -
+                    1
+                )
+            : lastTimedAt +
+              ((0.92 -
+                lastTimedAt) *
+                (index -
+                  timedCount +
+                  1)) /
+                Math.max(
+                  1,
+                  untimedCount
+                );
+
+        return {
+          ...event,
+          cue:
+            timed?.cue ??
+            "",
+          at:
+            Math.min(
+              0.94,
+              Math.max(
+                0.04,
+                timed?.at ??
+                  spreadAt
+              )
+            ),
+        };
+      }
+    );
+
+  /*
+    Engine order is the truth: force timing to be
+    monotonic so a swap never plays before its
+    compare.
+  */
+  for (
+    let index = 1;
+    index <
+    engineBeats.length;
+    index += 1
+  ) {
+    if (
+      engineBeats[index].at <=
+      engineBeats[index - 1].at
+    ) {
+      engineBeats[index].at =
+        Math.min(
+          0.94,
+          engineBeats[index - 1]
+            .at +
+            0.03
+        );
+
+      /* a cue would override the fixed time */
+      engineBeats[index].cue =
+        "";
+    }
+  }
+
+  return [
+    ...engineBeats,
+    ...otherBeats.slice(
+      0,
+      1
+    ),
+  ];
+}
+
+/*
+  BUG HUNT: a deterministic code walkthrough.
+  - first code scene: scan line by line from the top
+    and land on the bug line (the model's first cue, if
+    any, times the landing)
+  - later scenes before the fix: hold the bug line
+  - corrected_code: land on the changed line
+  Restrained model beats (equations/comparisons) are kept.
+*/
+function buildBugHuntBeats(
+  scene:
+    SceneInput,
+
+  sceneIndex:
+    number,
+
+  firstCodeScene:
+    number,
+
+  modelBeats:
+    DirectorBeat[]
+): DirectorBeat[] {
+  const extras =
+    modelBeats
+      .filter(
+        (beat) =>
+          beat.action ===
+            "show_equation" ||
+          beat.action ===
+            "compare_values" ||
+          beat.action ===
+            "emphasize_result"
+      )
+      .slice(0, 2);
+
+  const target =
+    scene.highlightLine;
+
+  if (
+    !scene.code ||
+    !target
+  ) {
+    return modelBeats.slice(
+      0,
+      4
+    );
+  }
+
+  const lineCount =
+    scene.code.split(
+      "\n"
+    ).length;
+
+  const bugLine =
+    Math.min(
+      lineCount,
+      Math.max(
+        1,
+        target
+      )
+    );
+
+  if (
+    scene.type ===
+    "corrected_code"
+  ) {
+    return [
+      {
+        cue: "",
+        at: 0.18,
+        action:
+          "highlight_code",
+        line: bugLine,
+      },
+      ...extras,
+    ];
+  }
+
+  if (
+    sceneIndex !==
+    firstCodeScene
+  ) {
+    return [
+      {
+        cue: "",
+        at: 0.1,
+        action:
+          "highlight_code",
+        line: bugLine,
+      },
+      ...extras,
+    ];
+  }
+
+  const landing =
+    modelBeats.find(
+      (beat) =>
+        beat.action ===
+          "highlight_code" &&
+        beat.cue
+    );
+
+  const landAt =
+    Math.min(
+      0.8,
+      Math.max(
+        0.35,
+        landing?.at ??
+          0.55
+      )
+    );
+
+  const scanLines =
+    Array.from(
+      {
+        length:
+          Math.max(
+            0,
+            bugLine - 1
+          ),
+      },
+      (_, index) =>
+        index + 1
+    ).slice(-6);
+
+  const scans: DirectorBeat[] =
+    scanLines.map(
+      (
+        line,
+        index
+      ) => ({
+        cue: "",
+        at:
+          0.06 +
+          ((landAt - 0.1) *
+            index) /
+            Math.max(
+              1,
+              scanLines.length
+            ),
+        action:
+          "scan_code",
+        line,
+      })
+    );
+
+  return [
+    ...scans,
+    {
+      cue:
+        landing?.cue ??
+        "",
+      at: landAt,
+      action:
+        "highlight_code",
+      line: bugLine,
+    },
+    ...extras.map(
+      (beat) => ({
+        ...beat,
+        at: Math.max(
+          beat.at,
+          landAt + 0.05
+        ),
+      })
+    ),
+  ];
+}
+
 function sanitizePlan(
   raw:
     unknown,
 
   scenes:
-    SceneInput[]
+    SceneInput[],
+
+  context:
+    PlanContext
 ) {
   const source =
     raw &&
@@ -458,10 +1072,6 @@ function sanitizePlan(
                   beat
                 )
           )
-          .slice(
-            0,
-            6
-          )
           .sort(
             (
               a,
@@ -471,17 +1081,73 @@ function sanitizePlan(
               b.at
           );
 
+      const packBeats =
+        filterBeatsForConcept(
+          beats,
+          scene,
+          context
+        );
+
+      if (
+        context.questionType ===
+        "bug_hunt"
+      ) {
+        directedScenes.push({
+          sceneIndex,
+          beats:
+            buildBugHuntBeats(
+              scene,
+              sceneIndex,
+              scenes.findIndex(
+                (candidate) =>
+                  Boolean(
+                    candidate.code
+                  ) &&
+                  candidate.type !==
+                    "corrected_code"
+              ),
+              packBeats
+            ),
+        });
+
+        return;
+      }
+
+      const engine =
+        context.questionType !==
+          "bug_hunt"
+          ? getEngineForKind(
+              scene.visual
+                ?.kind
+            )
+          : undefined;
+
+      const finalBeats =
+        engine
+          ? buildEngineBeats(
+              scene,
+              packBeats,
+              engine
+            )
+          : packBeats.slice(
+              0,
+              6
+            );
+
       directedScenes.push({
         sceneIndex,
-        beats,
+        beats:
+          finalBeats,
       });
     }
   );
 
   return {
-    version: 1,
+    version: 2,
     style:
       "minimal_algorithm_film_v1",
+    concept:
+      context.concept,
     scenes:
       directedScenes,
   };
@@ -631,13 +1297,40 @@ export const directAnimation =
       _ctx,
       args
     ) => {
+      const context:
+        PlanContext = {
+          concept:
+            detectConcept(
+              args.question,
+              args.correctAnswer,
+              args.codeSnippet ??
+                ""
+            ),
+          questionType:
+            args.questionType,
+        };
+
+      const pack =
+        args.questionType ===
+          "bug_hunt"
+          ? undefined
+          : getReferencePack(
+              context.concept
+            );
+
       const apiKey =
         process.env
           .OPENAI_API_KEY;
 
       if (!apiKey) {
-        throw new Error(
-          "OPENAI_API_KEY is not configured in Convex."
+        console.error(
+          "OPENAI_API_KEY is not configured in Convex. Using deterministic reference-pack plan."
+        );
+
+        return sanitizePlan(
+          {},
+          args.scenes,
+          context
         );
       }
 
@@ -685,6 +1378,12 @@ ${args.styleNotes?.length
 ${args.styleNotes.join("\n")}`
   : ""}
 
+${pack
+  ? renderPackForDirector(
+      pack
+    )
+  : ""}
+
 ALLOWED ACTIONS ONLY:
 1. focus_index
    fields: index
@@ -727,6 +1426,13 @@ ALLOWED ACTIONS ONLY:
 
 14. emphasize_result
     fields: text
+
+15+. STRUCTURE-ENGINE ACTIONS (only the ones listed in the reference pack above):
+    heap_*, bst_*, trie_*, graph_*, uf_*, seg_*, fw_*, ll_*, deque_*.
+    For these structures the engine computes the exact step sequence itself
+    from the scene's visual.operation. Your job there is TIMING: emit one beat
+    per narration moment, in order, with a cue copied word-for-word from the
+    narration. Field values you give are ignored — only cue/at are used.
 
 DIRECTING RULES:
 
@@ -795,121 +1501,143 @@ ${JSON.stringify(
 )}
 `;
 
-      const response =
-        await fetch(
-          "https://api.openai.com/v1/chat/completions",
-          {
-            method:
-              "POST",
-
-            headers: {
-              Authorization:
-                `Bearer ${apiKey}`,
-
-              "Content-Type":
-                "application/json",
-            },
-
-            body:
-              JSON.stringify({
-                model:
-                  MODEL,
-
-                temperature:
-                  0.25,
-
-                response_format: {
-                  type:
-                    "json_object",
-                },
-
-                messages: [
-                  {
-                    role:
-                      "system",
-
-                    content:
-                      "You are a precise animation director. Return valid JSON only. Never write React, CSS, prose, or markdown.",
-                  },
-
-                  {
-                    role:
-                      "user",
-
-                    content:
-                      prompt,
-                  },
-                ],
-              }),
-          }
-        );
-
-      if (!response.ok) {
-        const details =
-          await response
-            .text()
-            .catch(
-              () => ""
-            );
-
-        console.error(
-          "Animation director request failed:",
-          response.status,
-          details
-        );
-
-        throw new Error(
-          "Animation director generation failed."
-        );
-      }
-
-      const payload:
-        any =
-        await response.json();
-
-      const content =
-        payload
-          ?.choices?.[0]
-          ?.message
-          ?.content;
-
-      if (
-        typeof content !==
-          "string" ||
-        !content.trim()
-      ) {
-        throw new Error(
-          "Animation director returned no content."
-        );
-      }
-
-      let parsed:
-        unknown;
-
+      /*
+        The model only improves timing and
+        restrained emphasis. If it fails, the
+        reference-pack plan (heap sift sequence,
+        pointer rules) is still produced.
+      */
       try {
-        parsed =
-          JSON.parse(
-            stripJsonFences(
-              content
-            )
+        const response =
+          await fetch(
+            "https://api.openai.com/v1/chat/completions",
+            {
+              method:
+                "POST",
+
+              headers: {
+                Authorization:
+                  `Bearer ${apiKey}`,
+
+                "Content-Type":
+                  "application/json",
+              },
+
+              body:
+                JSON.stringify({
+                  model:
+                    MODEL,
+
+                  temperature:
+                    0.25,
+
+                  response_format: {
+                    type:
+                      "json_object",
+                  },
+
+                  messages: [
+                    {
+                      role:
+                        "system",
+
+                      content:
+                        "You are a precise animation director. Return valid JSON only. Never write React, CSS, prose, or markdown.",
+                    },
+
+                    {
+                      role:
+                        "user",
+
+                      content:
+                        prompt,
+                    },
+                  ],
+                }),
+            }
           );
+
+        if (!response.ok) {
+          const details =
+            await response
+              .text()
+              .catch(
+                () => ""
+              );
+
+          console.error(
+            "Animation director request failed:",
+            response.status,
+            details
+          );
+
+          throw new Error(
+            "Animation director generation failed."
+          );
+        }
+
+        const payload:
+          any =
+          await response.json();
+
+        const content =
+          payload
+            ?.choices?.[0]
+            ?.message
+            ?.content;
+
+        if (
+          typeof content !==
+            "string" ||
+          !content.trim()
+        ) {
+          throw new Error(
+            "Animation director returned no content."
+          );
+        }
+
+        let parsed:
+          unknown;
+
+        try {
+          parsed =
+            JSON.parse(
+              stripJsonFences(
+                content
+              )
+            );
+        } catch (
+          error
+        ) {
+          console.error(
+            "Animation director returned invalid JSON:",
+            content,
+            error
+          );
+
+          throw new Error(
+            "Animation director returned invalid JSON."
+          );
+        }
+
+        return sanitizePlan(
+          parsed,
+          args.scenes,
+          context
+        );
       } catch (
-        error
+        directorError
       ) {
         console.error(
-          "Animation director returned invalid JSON:",
-          content,
-          error
+          "Animation director failed. Using deterministic reference-pack plan:",
+          directorError
         );
 
-        throw new Error(
-          "Animation director returned invalid JSON."
+        return sanitizePlan(
+          {},
+          args.scenes,
+          context
         );
       }
-
-      return sanitizePlan(
-        parsed,
-        args.scenes
-      );
     },
   });

@@ -210,6 +210,9 @@ export const resetGame =
           questionStartedAt:
             undefined,
 
+          answersOpenAt:
+            undefined,
+
           questionEndsAt:
             undefined,
 

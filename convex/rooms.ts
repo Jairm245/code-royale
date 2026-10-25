@@ -2,6 +2,12 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { questionBank } from "./questions";
 
+/* Answers open when the question has been read, or after this at most. */
+const MAX_READ_MS = 10_000;
+
+/* How long players have to answer once answers open. */
+const ANSWER_WINDOW_MS = 20_000;
+
 export const createRoom = mutation({
   args: {
     code: v.string(),
@@ -41,7 +47,9 @@ export const startGame = mutation({
     const startedAt = Date.now();
     const duration = 20_000;
 
-    const question = questionBank[0];
+    /* random starter so every game doesn't open with the same question */
+    const question =
+      questionBank[Math.floor(Math.random() * questionBank.length)];
 
     await ctx.db.patch(args.roomId, {
       status: "playing",
@@ -52,7 +60,8 @@ export const startGame = mutation({
       correctAnswer: question.correctAnswer,
 
       questionStartedAt: startedAt,
-      questionEndsAt: startedAt + duration,
+      answersOpenAt: startedAt + MAX_READ_MS,
+      questionEndsAt: startedAt + MAX_READ_MS + duration,
 
       questionType: question.type,
 codeSnippet: "code" in question ? question.code : undefined,
@@ -106,7 +115,8 @@ export const nextRound = mutation({
       correctAnswer: question.correctAnswer,
 
       questionStartedAt: startedAt,
-      questionEndsAt: startedAt + duration,
+      answersOpenAt: startedAt + MAX_READ_MS,
+      questionEndsAt: startedAt + MAX_READ_MS + duration,
 
       questionType: question.type,
 codeSnippet: "code" in question ? question.code : undefined,
@@ -148,9 +158,68 @@ export const setGeneratedQuestion =
         questionStartedAt:
           startedAt,
 
+        answersOpenAt:
+          startedAt + MAX_READ_MS,
+
         questionEndsAt:
-          startedAt + 20_000,
+          startedAt +
+          MAX_READ_MS +
+          ANSWER_WINDOW_MS,
       });
+    },
+  });
+
+/*
+  Called by the host when the question has been read
+  aloud. Opens answers now (if the 10 s cap hasn't
+  already opened them) and starts the full answer timer.
+*/
+export const openAnswers =
+  mutation({
+    args: {
+      roomId: v.id("rooms"),
+      round: v.number(),
+    },
+
+    handler: async (ctx, args) => {
+      const room =
+        await ctx.db.get(
+          args.roomId
+        );
+
+      if (
+        !room ||
+        room.status !==
+          "playing" ||
+        room.currentRound !==
+          args.round
+      ) {
+        return { opened: false };
+      }
+
+      const now =
+        Date.now();
+
+      if (
+        room.answersOpenAt !==
+          undefined &&
+        now >=
+          room.answersOpenAt
+      ) {
+        return { opened: false };
+      }
+
+      await ctx.db.patch(
+        args.roomId,
+        {
+          answersOpenAt: now,
+          questionEndsAt:
+            now +
+            ANSWER_WINDOW_MS,
+        }
+      );
+
+      return { opened: true };
     },
   });
 export const setExplanation =

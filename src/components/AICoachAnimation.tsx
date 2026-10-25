@@ -14,10 +14,19 @@ import {
 
 import {
   playStreamingVoice,
+  prefetchStreamingVoice,
   stopGeneratedVoice,
 } from "../utils/generatedVoice";
 
 import "./AICoachAnimationReferenceStyle.css";
+
+import {
+  StructureView,
+} from "./StructureVisuals";
+
+import {
+  ENGINE_KINDS,
+} from "../../convex/structureEngines";
 
 import {
   playSfx,
@@ -80,6 +89,8 @@ export type AnimationDirectorBeat = {
 export type AnimationDirectorPlan = {
   version: number;
   style: string;
+  /* reference-pack concept id, e.g. "min_heap", "sliding_window" */
+  concept?: string;
   scenes: Array<{
     sceneIndex: number;
     beats:
@@ -560,6 +571,27 @@ function AICoachAnimation({
       null;
   }, [
     animationPlan,
+  ]);
+
+  /*
+    Start loading every scene's voice at once so each
+    next scene's narration is ready when it begins.
+  */
+  useEffect(() => {
+    for (
+      const scene
+      of scenes
+    ) {
+      prefetchStreamingVoice(
+        getSceneNarration(
+          scene
+        ),
+        scene.type
+      );
+    }
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [
+    scenes.length,
   ]);
 
   /* ========================================
@@ -1087,6 +1119,7 @@ function AICoachAnimation({
       "hashmap",
       "stack",
       "tree",
+      ...ENGINE_KINDS,
       "code",
     ]);
 
@@ -1136,6 +1169,54 @@ function AICoachAnimation({
           scene.highlightText
         )
       : undefined;
+
+  /*
+    Never show an empty stage: if the scene's visual
+    has no data its renderer can draw, fall back to
+    a reasoning card with the scene's caption.
+  */
+  const hasRenderableVisual =
+    (() => {
+      if (!visual) {
+        return false;
+      }
+
+      switch (visual.kind) {
+        case "reasoning":
+        case "array":
+        case "pointers":
+        case "stack":
+        case "complexity":
+        case "takeaway":
+          return true;
+        case "hashmap":
+          return Boolean(
+            visual.entries?.length
+          );
+        case "tree":
+          return Boolean(
+            visual.values?.some(
+              (value) =>
+                value.toLowerCase() !==
+                "null"
+            )
+          );
+        case "code":
+          return Boolean(
+            codeToDisplay
+          );
+        default:
+          return (
+            ENGINE_KINDS.has(
+              visual.kind
+            ) &&
+            Boolean(
+              visual.values?.length ||
+                visual.entries?.length
+            )
+          );
+      }
+    })();
 
   return (
     <section className="ref-coach">
@@ -1207,6 +1288,11 @@ function AICoachAnimation({
                 correctedMode={
                   isCorrectedCode
                 }
+                originalCode={
+                  isCorrectedCode
+                    ? fallbackCode
+                    : undefined
+                }
               />
             )}
 
@@ -1241,11 +1327,11 @@ function AICoachAnimation({
                 "array" ||
               visual?.kind ===
                 "pointers"
-            ) &&
-            visual.values && (
+            ) && (
               <ArrayVisual
                 values={
-                  visual.values
+                  visual.values ??
+                  []
                 }
                 activeIndices={
                   visual.activeIndices
@@ -1265,12 +1351,36 @@ function AICoachAnimation({
                 directorBeats={
                   directorBeats
                 }
+                windowMode={
+                  animationPlan
+                    ?.concept ===
+                  "sliding_window"
+                }
+              />
+            )}
+
+          {!isBugHunt &&
+            visual &&
+            hasRenderableVisual &&
+            ENGINE_KINDS.has(
+              visual.kind
+            ) && (
+              <StructureView
+                visual={
+                  visual
+                }
+                beats={
+                  directorBeats
+                }
               />
             )}
 
           {!isBugHunt &&
             visual?.kind ===
               "hashmap" &&
+            Boolean(
+              visual.entries?.length
+            ) &&
             visual.entries && (
               <HashMapVisual
                 entries={
@@ -1293,11 +1403,11 @@ function AICoachAnimation({
 
           {!isBugHunt &&
             visual?.kind ===
-              "stack" &&
-            visual.stack && (
+              "stack" && (
               <StackVisual
                 stack={
-                  visual.stack
+                  visual.stack ??
+                  []
                 }
                 values={
                   visual.values
@@ -1323,6 +1433,7 @@ function AICoachAnimation({
           {!isBugHunt &&
             visual?.kind ===
               "tree" &&
+            hasRenderableVisual &&
             visual.values && (
               <TreeVisual
                 values={
@@ -1412,6 +1523,33 @@ function AICoachAnimation({
                 steps={[
                   scene.text,
                 ]}
+                beat={
+                  sceneBeat
+                }
+                frame={
+                  motionFrame
+                }
+                directorBeats={
+                  directorBeats
+                }
+              />
+            )}
+
+          {!isBugHunt &&
+            !isTakeaway &&
+            visual &&
+            !hasRenderableVisual && (
+              <ReasoningVisual
+                steps={
+                  visual.reasoningSteps?.length
+                    ? visual.reasoningSteps
+                    : [
+                        scene.text,
+                      ]
+                }
+                operation={
+                  visual.operation
+                }
                 beat={
                   sceneBeat
                 }
@@ -1595,6 +1733,7 @@ function CodeAnimation({
   directorBeats = [],
   bugMode = false,
   correctedMode = false,
+  originalCode,
 }: {
   code: string;
   highlightLine?: number;
@@ -1608,6 +1747,8 @@ function CodeAnimation({
     AnimationDirectorBeat[];
   bugMode?: boolean;
   correctedMode?: boolean;
+  /* corrected mode: the buggy original, shown as a diff */
+  originalCode?: string;
 }) {
   const lines =
     useMemo(
@@ -1691,6 +1832,47 @@ function CodeAnimation({
       values.length - 1
     );
 
+  /*
+    Bug Hunt: while the scan is still moving down the
+    code, don't give the answer away. The bug mark
+    appears when the scan lands (highlight_code), or
+    immediately if there are no line beats at all.
+  */
+  const bugRevealed =
+    !lineBeat ||
+    lineBeat.action ===
+      "highlight_code";
+
+  /* Corrected code: which lines changed vs the original */
+  const originalLines =
+    correctedMode &&
+    originalCode
+      ? originalCode.split(
+          "\n"
+        )
+      : [];
+
+  const changedLines =
+    new Set(
+      lines
+        .map(
+          (
+            line,
+            index
+          ) =>
+            originalLines.length >
+              0 &&
+            (originalLines[index] ?? "").trim() !==
+              line.trim()
+              ? index
+              : -1
+        )
+        .filter(
+          (index) =>
+            index >= 0
+        )
+    );
+
   return (
     <div
       className={`ref-code-scene ${
@@ -1719,32 +1901,75 @@ function CodeAnimation({
 
             const bug =
               bugMode &&
+              bugRevealed &&
               number ===
                 highlightLine;
+
+            const changed =
+              changedLines.has(
+                index
+              );
+
+            const removed =
+              changed
+                ? originalLines[
+                    index
+                  ]
+                : undefined;
 
             return (
               <div
                 key={
                   `${number}-${line}`
                 }
-                className={`ref-code-line ${
-                  live
-                    ? "ref-code-live"
-                    : ""
-                } ${
-                  bug
-                    ? "ref-code-bug"
-                    : ""
-                }`}
               >
-                <span>
-                  {number}
-                </span>
+                {removed !==
+                  undefined &&
+                  removed.trim() !==
+                    "" && (
+                    <div className="ref-code-line ref-code-removed">
+                      <span>
+                        −
+                      </span>
 
-                <code>
-                  {line ||
-                    " "}
-                </code>
+                      <code>
+                        {removed}
+                      </code>
+                    </div>
+                  )}
+
+                <div
+                  className={`ref-code-line ${
+                    live
+                      ? "ref-code-live"
+                      : ""
+                  } ${
+                    bug
+                      ? "ref-code-bug"
+                      : ""
+                  } ${
+                    changed
+                      ? "ref-code-added"
+                      : ""
+                  }`}
+                >
+                  <span>
+                    {changed
+                      ? "+"
+                      : number}
+                  </span>
+
+                  <code>
+                    {line ||
+                      " "}
+                  </code>
+
+                  {bug && (
+                    <em className="ref-code-bug-tag">
+                      bug
+                    </em>
+                  )}
+                </div>
               </div>
             );
           }
@@ -1779,17 +2004,105 @@ function CodeAnimation({
   );
 }
 
+/*
+  Cell width follows the longest value so text never
+  overlaps; very long values are clipped with an
+  ellipsis (full text on hover). Many cells shrink the
+  font instead of overflowing the stage.
+*/
+function getArrayCellSizing(
+  values: string[]
+) {
+  const longest =
+    Math.max(
+      1,
+      ...values.map(
+        (value) =>
+          Math.min(
+            14,
+            value.length
+          )
+      )
+    );
+
+  const width =
+    Math.min(
+      128,
+      Math.max(
+        44,
+        18 +
+          longest * 9
+      )
+    );
+
+  const total =
+    width *
+    Math.max(
+      1,
+      values.length
+    );
+
+  const scale =
+    total > 720
+      ? Math.max(
+          0.62,
+          720 / total
+        )
+      : 1;
+
+  return {
+    width:
+      Math.round(
+        width * scale
+      ),
+    fontSize:
+      `${(
+        (longest > 6
+          ? 0.78
+          : 0.9) *
+        scale
+      ).toFixed(2)}rem`,
+  };
+}
+
 function ReferenceArrayStrip({
   values,
   pointers = [],
   focusIndex,
   activeIndices = [],
+  windowRange,
 }: {
   values: string[];
   pointers?: Pointer[];
   focusIndex: number;
   activeIndices?: number[];
+  windowRange?: {
+    start: number;
+    end: number;
+  };
 }) {
+  /* An empty input is an important edge case: draw it. */
+  if (
+    values.length ===
+    0
+  ) {
+    return (
+      <div className="ref-array-shell ref-array-empty">
+        <div className="ref-array-empty-box">
+          [ ]
+        </div>
+        <span>
+          empty array · n = 0
+        </span>
+      </div>
+    );
+  }
+
+  const sizing =
+    getArrayCellSizing(
+      values
+    );
+
   return (
     <div className="ref-array-shell">
       <div className="ref-index-row">
@@ -1802,6 +2115,10 @@ function ReferenceArrayStrip({
               key={
                 index
               }
+              style={{
+                width:
+                  sizing.width,
+              }}
             >
               {index}
             </span>
@@ -1815,8 +2132,13 @@ function ReferenceArrayStrip({
             value,
             index
           ) => {
-            const pointerHere =
-              pointers.find(
+            /*
+              Several pointers can share a cell
+              (e.g. left === right on a size-1
+              window). Show every label.
+            */
+            const pointersHere =
+              pointers.filter(
                 (
                   pointer
                 ) =>
@@ -1831,23 +2153,70 @@ function ReferenceArrayStrip({
                 index
               );
 
+            const inWindow =
+              windowRange !==
+                undefined &&
+              index >=
+                windowRange.start &&
+              index <=
+                windowRange.end;
+
             return (
               <div
                 key={
                   `${index}-${value}`
                 }
-                className={`ref-cell ${
+                title={
+                  value
+                }
+                style={{
+                  width:
+                    sizing.width,
+                  fontSize:
+                    sizing.fontSize,
+                }}
+                className={[
+                  "ref-cell",
                   active
                     ? "ref-cell-active"
-                    : ""
-                }`}
+                    : "",
+                  inWindow
+                    ? "ref-cell-window"
+                    : "",
+                  inWindow &&
+                  index ===
+                    windowRange?.start
+                    ? "ref-cell-window-start"
+                    : "",
+                  inWindow &&
+                  index ===
+                    windowRange?.end
+                    ? "ref-cell-window-end"
+                    : "",
+                ]
+                  .filter(
+                    Boolean
+                  )
+                  .join(" ")}
               >
-                {value}
+                <span className="ref-cell-text">
+                  {value}
+                </span>
 
-                {pointerHere && (
+                {pointersHere.length >
+                  0 && (
                   <div className="ref-array-pointer">
                     <span>
-                      {pointerHere.label}
+                      {pointersHere
+                        .map(
+                          (
+                            pointer
+                          ) =>
+                            pointer.label
+                        )
+                        .join(
+                          " · "
+                        )}
                     </span>
 
                     <i />
@@ -1868,6 +2237,7 @@ function ArrayVisual({
   pointers = [],
   operation,
   directorBeats = [],
+  windowMode = false,
 }: {
   values: string[];
   activeIndices?: number[];
@@ -1877,6 +2247,12 @@ function ArrayVisual({
   frame?: number;
   directorBeats?:
     AnimationDirectorBeat[];
+  /*
+    Sliding-window pack: the window band is derived
+    from the CURRENT left/right pointers, so it can
+    never lag behind (or vanish after) a pointer move.
+  */
+  windowMode?: boolean;
 }) {
   const focusBeat =
     getLastDirectorBeat(
@@ -1930,6 +2306,49 @@ function ArrayVisual({
       values.length - 1
     );
 
+  const leftPointer =
+    directedPointers.find(
+      (pointer) =>
+        pointer.label ===
+        "left"
+    );
+
+  const rightPointer =
+    directedPointers.find(
+      (pointer) =>
+        pointer.label ===
+        "right"
+    );
+
+  const windowRange =
+    windowMode &&
+    leftPointer &&
+    rightPointer &&
+    leftPointer.index <=
+      rightPointer.index
+      ? {
+          start:
+            leftPointer.index,
+          end:
+            rightPointer.index,
+        }
+      : undefined;
+
+  const shownActive =
+    windowRange
+      ? Array.from(
+          {
+            length:
+              windowRange.end -
+              windowRange.start +
+              1,
+          },
+          (_, offset) =>
+            windowRange.start +
+            offset
+        )
+      : activeIndices;
+
   return (
     <div className="ref-array-scene">
       {(textBeat?.text ||
@@ -1948,28 +2367,55 @@ function ArrayVisual({
           directedPointers
         }
         activeIndices={
-          activeIndices
+          shownActive
         }
         focusIndex={
-          focusIndex
+          windowRange
+            ? -1
+            : focusIndex
+        }
+        windowRange={
+          windowRange
         }
       />
 
+      {values.length >
+        0 && (
       <div className="ref-array-trace">
-        <span>
-          i = {focusIndex}
-        </span>
+        {windowRange ? (
+          <>
+            <span>
+              window = [{windowRange.start}..{windowRange.end}]
+            </span>
 
-        <i />
+            <i />
 
-        <span>
-          value ={" "}
-          {values[
-            focusIndex
-          ] ??
-            "—"}
-        </span>
+            <span>
+              size ={" "}
+              {windowRange.end -
+                windowRange.start +
+                1}
+            </span>
+          </>
+        ) : (
+          <>
+            <span>
+              i = {focusIndex}
+            </span>
+
+            <i />
+
+            <span>
+              value ={" "}
+              {values[
+                focusIndex
+              ] ??
+                "—"}
+            </span>
+          </>
+        )}
       </div>
+      )}
     </div>
   );
 }
@@ -2281,7 +2727,14 @@ function StackVisual({
     );
 
   return (
-    <div className="ref-stack-scene">
+    <div
+      className={`ref-stack-scene ${
+        values.length ===
+        0
+          ? "ref-stack-scene-solo"
+          : ""
+      }`}
+    >
       {values.length >
         0 && (
         <div className="ref-stack-source">
@@ -2303,6 +2756,8 @@ function StackVisual({
         </div>
       )}
 
+      {values.length >
+        0 && (
       <div className="ref-stack-relationship">
         <span>
           {stackBeat?.action ===
@@ -2314,10 +2769,11 @@ function StackVisual({
               : "→"}
         </span>
       </div>
+      )}
 
       <div className="ref-stack-work">
         <span className="ref-structure-label">
-          stack
+          stack · top ↑
         </span>
 
         <div className="ref-stack-column">
@@ -2352,7 +2808,7 @@ function StackVisual({
           )}
 
           <span className="ref-stack-base">
-            top
+            bottom
           </span>
         </div>
       </div>

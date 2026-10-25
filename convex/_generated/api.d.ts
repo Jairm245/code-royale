@@ -19,7 +19,10 @@ import type * as players from "../players.js";
 import type * as powerupEvents from "../powerupEvents.js";
 import type * as powerups from "../powerups.js";
 import type * as questions from "../questions.js";
+import type * as referencePackLibrary from "../referencePackLibrary.js";
+import type * as referencePacks from "../referencePacks.js";
 import type * as rooms from "../rooms.js";
+import type * as structureEngines from "../structureEngines.js";
 
 import type {
   ApiFromModules,
@@ -39,7 +42,10 @@ declare const fullApi: ApiFromModules<{
   powerupEvents: typeof powerupEvents;
   powerups: typeof powerups;
   questions: typeof questions;
+  referencePackLibrary: typeof referencePackLibrary;
+  referencePacks: typeof referencePacks;
   rooms: typeof rooms;
+  structureEngines: typeof structureEngines;
 }>;
 
 /**

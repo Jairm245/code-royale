@@ -37,6 +37,17 @@ export const submitAnswer = mutation({
 
     const now = Date.now();
 
+    /*
+      Answers stay locked until the question has been
+      read (small grace for clock/network jitter).
+    */
+    if (
+      room.answersOpenAt !== undefined &&
+      now < room.answersOpenAt - 400
+    ) {
+      throw new Error("Answers open after the question is read");
+    }
+
     const correct =
       args.answerIndex === room.correctAnswer;
 
@@ -46,9 +57,12 @@ export const submitAnswer = mutation({
       const remaining =
         room.questionEndsAt - now;
 
+      /* speed bonus is measured from when answers opened */
       const totalDuration =
         room.questionEndsAt -
-        (room.questionStartedAt ?? now);
+        (room.answersOpenAt ??
+          room.questionStartedAt ??
+          now);
 
       const percentageRemaining =
         Math.max(0, remaining / totalDuration);

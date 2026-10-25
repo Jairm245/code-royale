@@ -28,27 +28,27 @@ import {
 
 import GameAlert from "../components/GameAlert";
 
-function getQuestionTypeLabel(
-  type?: string
-) {
-  switch (type) {
-    case "bug_hunt":
-      return "🐛 BUG HUNT";
+import {
+  Icon,
+  categoryOf,
+} from "../components/Icon";
 
-    case "optimal_approach":
-      return "⚡ OPTIMAL APPROACH";
+import {
+  Clock,
+  Curtain,
+  Dots,
+} from "../components/ShowParts";
 
-    case "complexity":
-      return "⏱️ COMPLEXITY";
+import {
+  useAnswersOpen,
+} from "../hooks/useAnswersOpen";
 
-    case "data_structure":
-      return "🧱 DATA STRUCTURES";
-
-    case "edge_case":
-      return "🔍 EDGE CASE";
-
-    default:
-      return "CODE ROYALE";
+/* light haptic feedback on phones that support it */
+function buzz(pattern: number | number[]) {
+  try {
+    navigator.vibrate?.(pattern);
+  } catch {
+    /* not supported */
   }
 }
 
@@ -324,6 +324,39 @@ function PlayerGamePage() {
     );
 
   /*
+    Answers stay locked until the host has read the
+    question (or 10 s pass); the 20 s timer starts then.
+  */
+  const {
+    open: answersOpen,
+    readingProgress,
+  } = useAnswersOpen(
+    room?.answersOpenAt,
+    room?.questionStartedAt
+  );
+
+  const openedBuzzRoundRef =
+    useRef<number | null>(null);
+
+  useEffect(() => {
+    if (
+      room?.status ===
+        "playing" &&
+      answersOpen &&
+      openedBuzzRoundRef.current !==
+        room.currentRound
+    ) {
+      openedBuzzRoundRef.current =
+        room.currentRound;
+      buzz(30);
+    }
+  }, [
+    room?.status,
+    room?.currentRound,
+    answersOpen,
+  ]);
+
+  /*
     GUARANTEE NEXT-ROUND POWERUPS APPLY
 
     The host normally applies queued effects
@@ -452,8 +485,8 @@ function PlayerGamePage() {
 
       setPowerUpMessage(
         penalty > 0
-          ? `🛡️ Firewall blocked one Lag Spike. Other attacks still cost ${penalty}s.`
-          : "🛡️ Firewall blocked a Lag Spike!"
+          ? `Firewall blocked one Lag Spike. Other attacks still cost ${penalty}s.`
+          : "Firewall blocked a Lag Spike!"
       );
     } else if (
       penalty >
@@ -468,7 +501,7 @@ function PlayerGamePage() {
       );
 
       setPowerUpMessage(
-        `⚡ LAG SPIKE! -${difference} seconds this round`
+        `LAG SPIKE! -${difference} seconds this round`
       );
     }
 
@@ -517,7 +550,7 @@ function PlayerGamePage() {
       );
 
       setPowerUpMessage(
-        "⚡ Lag Spike earned! 3-streak or 5-correct milestone reached."
+        "Lag Spike earned! 3-streak or 5-correct milestone reached."
       );
     }
 
@@ -539,50 +572,31 @@ function PlayerGamePage() {
     answers === undefined
   ) {
     return (
-      <main className="player-game-shell">
-        <div className="player-loading">
-          <div className="loading-crown">
-            👑
-          </div>
-
-          <h2>
-            Loading Code Royale...
-          </h2>
-        </div>
+      <main className="shell shell-phone">
+        <Curtain icon="crown" title="Loading">
+          <Dots />
+        </Curtain>
       </main>
     );
   }
 
   if (room === null) {
     return (
-      <main className="player-game-shell">
-        <h2>
-          Game not found.
-        </h2>
+      <main className="shell shell-phone">
+        <Curtain icon="search" title="Game not found">
+          <a className="btn btn-gold" href="/join">Join a game</a>
+        </Curtain>
       </main>
     );
   }
 
-  if (!playerId) {
+  if (!playerId || !currentPlayer) {
     return (
-      <main className="player-game-shell">
-        <h2>
-          Player session not found.
-        </h2>
-
-        <p>
-          Please rejoin the room.
-        </p>
-      </main>
-    );
-  }
-
-  if (!currentPlayer) {
-    return (
-      <main className="player-game-shell">
-        <h2>
-          Player not found.
-        </h2>
+      <main className="shell shell-phone">
+        <Curtain icon="users" title="Join again">
+          <p>This phone isn't in the game. Rejoin with the room code.</p>
+          <a className="btn btn-gold" href={`/join/${room.code}`}>Rejoin room {room.code}</a>
+        </Curtain>
       </main>
     );
   }
@@ -604,12 +618,14 @@ function PlayerGamePage() {
 
     if (
       selectedAnswer !== null ||
-      secondsRemaining <= 0
+      secondsRemaining <= 0 ||
+      !answersOpen
     ) {
       return;
     }
 
     setSelectedAnswer(index);
+    buzz(18);
 
     try {
       const response =
@@ -634,7 +650,7 @@ function PlayerGamePage() {
         );
 
         setPowerUpMessage(
-          `🔥 Correct! +${response.points}`
+          `Correct! +${response.points}`
         );
       }
     } catch (error) {
@@ -726,7 +742,7 @@ function PlayerGamePage() {
       );
 
       setPowerUpMessage(
-        "✂️ 50 / 50 activated! Two wrong answers removed."
+        "50 / 50 activated! Two wrong answers removed."
       );
     } catch (error) {
       console.error(
@@ -779,7 +795,7 @@ function PlayerGamePage() {
       );
 
       setPowerUpMessage(
-        `🛡️ Firewall queued for Round ${
+        `Firewall queued for Round ${
           response
             ?.queuedForRound ??
           room.currentRound + 1
@@ -846,7 +862,7 @@ function PlayerGamePage() {
       );
 
       setPowerUpMessage(
-        `⚡ Lag Spike queued against ${targetName} for Round ${
+        `Lag Spike queued against ${targetName} for Round ${
           response
             ?.queuedForRound ??
           room.currentRound + 1
@@ -860,6 +876,23 @@ function PlayerGamePage() {
     }
   }
 
+  const head = (
+    <header className="phone-head">
+      <div className="phone-id">
+        <span className="avatar">{currentPlayer.name.charAt(0).toUpperCase()}</span>
+        <strong>{currentPlayer.name}</strong>
+      </div>
+      <span className="score">
+        {currentPlayer.score}
+        <small>pts</small>
+      </span>
+    </header>
+  );
+
+  const toast = powerUpMessage ? (
+    <GameAlert message={powerUpMessage} type={alertType} onClose={() => setPowerUpMessage("")} />
+  ) : null;
+
   /*
     FINAL RESULTS
   */
@@ -869,13 +902,8 @@ function PlayerGamePage() {
     "finished"
   ) {
     const finalPlayers =
-      [
-        ...players,
-      ].sort(
-        (
-          a,
-          b
-        ) =>
+      [...players].sort(
+        (a, b) =>
           b.score -
           a.score
       );
@@ -891,75 +919,20 @@ function PlayerGamePage() {
       placement === 1;
 
     return (
-      <main className="player-game-shell">
-        <header className="player-topbar">
-          <div>
-            <span className="topbar-logo">
-              👑
-            </span>
+      <main className="shell shell-phone">
+        {head}
 
-            <strong>
-              CODE ROYALE
-            </strong>
+        <section className={`verdict ${isWinner ? "verdict-good" : ""}`}>
+          <div className="verdict-badge" style={isWinner ? undefined : { background: "var(--velvet-2)", color: "var(--gold)" }}>
+            <Icon name={isWinner ? "crown" : "trophy"} />
           </div>
 
-          <div className="score-chip">
-            {currentPlayer.score} pts
-          </div>
-        </header>
+          <h1>{isWinner ? "You won" : `${placement}${ordinal(placement)} place`}</h1>
 
-        <section className="results-card">
-          <p className="eyebrow">
-            GAME COMPLETE
-          </p>
+          <div className="verdict-points">{currentPlayer.score}</div>
+          <p className="muted">final points, {placement} of {finalPlayers.length}</p>
 
-          <div className="results-icon">
-            {isWinner
-              ? "👑"
-              : "🏆"}
-          </div>
-
-          <h1>
-            {isWinner
-              ? "You won!"
-              : `You placed #${placement}`}
-          </h1>
-
-          <div className="points-earned">
-            {currentPlayer.score}
-          </div>
-
-          <p>
-            final points
-          </p>
-
-          <div className="correct-answer-card">
-            <span>
-              FINAL PLACEMENT
-            </span>
-
-            <strong>
-              #{placement} of{" "}
-              {finalPlayers.length}
-            </strong>
-          </div>
-
-          <div className="player-score-pill">
-            {isWinner
-              ? "👑"
-              : "⚔️"}{" "}
-            {currentPlayer.name}
-
-            <span>
-              {currentPlayer.score} pts
-            </span>
-          </div>
-
-          <p className="next-round-text">
-            {isWinner
-              ? "You are the Code Royale champion."
-              : "Thanks for playing Code Royale."}
-          </p>
+          <p className="muted">Watch the big screen for the podium.</p>
         </section>
       </main>
     );
@@ -974,32 +947,12 @@ function PlayerGamePage() {
     "explanation"
   ) {
     return (
-      <main className="player-game-shell">
-        <div className="coach-player-card">
-          <div className="coach-player-icon">
-            🤖
-          </div>
-
-          <p className="eyebrow">
-            AI COACH
-          </p>
-
-          <h1>
-            Nobody got it
-          </h1>
-
-          <p>
-            Watch the main
-            screen for the
-            explanation.
-          </p>
-
-          <div className="coach-thinking">
-            <span />
-            <span />
-            <span />
-          </div>
-        </div>
+      <main className="shell shell-phone">
+        {head}
+        <Curtain icon="coach" title="Coach time">
+          <p>Nobody got that one. The coach is explaining it on the big screen.</p>
+          <Dots />
+        </Curtain>
       </main>
     );
   }
@@ -1019,113 +972,54 @@ function PlayerGamePage() {
           currentPlayer._id
       );
 
+    const correctIndex =
+      room.correctAnswer;
+
+    const correctText =
+      correctIndex !== undefined &&
+      room.choices
+        ? room.choices[correctIndex]
+        : "Unknown";
+
     return (
-      <main className="player-game-shell">
-        {powerUpMessage && (
-          <GameAlert
-            message={
-              powerUpMessage
-            }
-            type={
-              alertType
-            }
-            onClose={() =>
-              setPowerUpMessage(
-                ""
-              )
-            }
-          />
-        )}
+      <main className="shell shell-phone">
+        {toast}
+        {head}
 
-        <section className="results-card">
-          <p className="eyebrow">
-            ROUND{" "}
-            {room.currentRound}
-          </p>
-
-          {playerAnswer?.correct ? (
-            <>
-              <div className="results-icon">
-                🔥
-              </div>
-
-              <h1>
-                Correct!
-              </h1>
-
-              <div className="points-earned">
-                +
-                {
-                  playerAnswer.points
-                }
-              </div>
-
-              <p>
-                points
-              </p>
-            </>
-          ) : (
-            <>
-              <div className="results-icon">
-                👀
-              </div>
-
-              <h1>
-                Not Quite
-              </h1>
-
-              <p>
-                You'll get
-                the next one.
-              </p>
-            </>
-          )}
-
-          <div className="correct-answer-card">
-            <span>
-              Correct answer
-            </span>
-
-            <strong>
-              {room.correctAnswer !==
-                undefined &&
-              room.choices
-                ? room.choices[
-                    room
-                      .correctAnswer
-                  ]
-                : "Unknown"}
-            </strong>
+        <section className={`verdict ${playerAnswer?.correct ? "verdict-good" : "verdict-bad"}`}>
+          <div className="verdict-badge">
+            <Icon name={playerAnswer?.correct ? "check" : playerAnswer ? "flame" : "clock"} />
           </div>
 
-          <div className="player-score-pill">
-            👑{" "}
-            {
-              currentPlayer.name
-            }
+          <h1>
+            {playerAnswer?.correct
+              ? "Correct"
+              : playerAnswer
+                ? "Not this time"
+                : "No answer"}
+          </h1>
 
-            <span>
-              {
-                currentPlayer.score
-              }{" "}
-              pts
-            </span>
+          {playerAnswer?.correct && <div className="verdict-points">+{playerAnswer.points}</div>}
+
+          <div className="answer-was">
+            <span>The answer</span>
+            {correctIndex !== undefined && (
+              <div className={`tile tile-${correctIndex}`}>
+                <span className="tile-key">{String.fromCharCode(65 + correctIndex)}</span>
+                <span className="tile-text">{correctText}</span>
+              </div>
+            )}
           </div>
 
-          {(currentPlayer
-            .fiftyFifty ??
-            0) > 0 && (
-            <div className="comeback-banner">
-              🔥 Comeback
-              boost ready
-              for next
-              round!
+          {(currentPlayer.fiftyFifty ?? 0) > 0 && (
+            <div className="banner banner-gold">
+              <Icon name="split" />
+              Comeback boost: you have a 50/50 for the next round
             </div>
           )}
 
-          <p className="next-round-text">
-            Next round
-            loading...
+          <p className="muted">
+            {room.currentRound >= 10 ? "Final results are next" : "Next question coming up"}
           </p>
         </section>
       </main>
@@ -1134,464 +1028,263 @@ function PlayerGamePage() {
 
   /*
     ROUND TRANSITION FALLBACK
-
     Convex can briefly move the room through a
     transition state while the host is generating
-    or loading the next question. On slower mobile
-    devices that gap can otherwise look like a
-    blank/black screen.
+    or loading the next question.
   */
-
   const freshQuestionTimerReady =
-    room.questionEndsAt !==
-      undefined &&
-    room.questionEndsAt >
-      Date.now();
+    room.questionEndsAt !== undefined &&
+    room.questionEndsAt > Date.now();
 
   if (
     restartingGameRef.current ||
-    room.status !==
-      "playing" ||
+    room.status !== "playing" ||
     !room.question ||
     !room.choices ||
     !freshQuestionTimerReady
   ) {
     return (
-      <main className="player-game-shell">
-        <header className="player-topbar">
-          <div>
-            <span className="topbar-logo">
-              👑
-            </span>
-
-            <strong>
-              CODE ROYALE
-            </strong>
-          </div>
-
-          <div className="score-chip">
-            {currentPlayer.score} pts
-          </div>
-        </header>
-
-        <div className="player-loading">
-          <div className="loading-crown">
-            ⚔️
-          </div>
-
-          <h2>
+      <main className="shell shell-phone">
+        {head}
+        <Curtain icon={restartingGameRef.current ? "replay" : "crown"} title={restartingGameRef.current ? "New game" : "Get ready"}>
+          <p>
             {restartingGameRef.current
-              ? "New game starting..."
-              : "Next round loading..."}
-          </h2>
-
-          <p
-            style={{
-              opacity: 0.6,
-              textAlign: "center",
-              marginTop: "8px",
-            }}
-          >
-            {restartingGameRef.current
-              ? "Resetting the arena for Round 1."
-              : "Get ready for the next challenge."}
+              ? "Scores are reset. Round 1 is on its way."
+              : "The next question is about to appear."}
           </p>
-        </div>
+          <Dots />
+        </Curtain>
       </main>
     );
   }
 
   /*
-    TIMER RING
+    ACTIVE QUESTION
   */
 
-  const timerDanger =
-    secondsRemaining <= 5;
+  const category =
+    categoryOf(
+      room.questionType
+    );
 
-  const totalRoundTime =
-    20;
+  const timeUp =
+    answersOpen &&
+    secondsRemaining <= 0;
 
-  const timerPercent =
-    Math.max(
-      0,
-      Math.min(
-        100,
-        (secondsRemaining /
-          totalRoundTime) *
-          100
-      )
+  const longChoices =
+    room.choices.some(
+      (choice) =>
+        choice.length > 28
+    );
+
+  const answerLocked =
+    !answersOpen ||
+    selectedAnswer !== null ||
+    timeUp;
+
+  const finalRound =
+    room.currentRound >= 10;
+
+  const rivals =
+    players.filter(
+      (player) =>
+        player._id !==
+        currentPlayer._id
     );
 
   return (
-    <main className="player-game-shell">
-      {powerUpMessage && (
-        <GameAlert
-          message={
-            powerUpMessage
-          }
-          type={
-            alertType
-          }
-          onClose={() =>
-            setPowerUpMessage(
-              ""
-            )
-          }
-        />
-      )}
+    <main className="shell shell-phone">
+      {toast}
+      {head}
 
-      <header className="player-topbar">
-        <div>
-          <span className="topbar-logo">
-            👑
+      <section className="phone-status">
+        <div className="phone-status-text">
+          <span className="phone-round">Round {room.currentRound}</span>
+          <span className="tag">
+            <Icon name={category.icon} />
+            {category.label}
           </span>
-
-          <strong>
-            CODE ROYALE
-          </strong>
         </div>
 
-        <div className="score-chip">
-          {
-            currentPlayer.score
-          }{" "}
-          pts
-        </div>
-      </header>
-
-      <section className="round-info">
-        <span className="round-chip">
-          ROUND{" "}
-          {
-            room.currentRound
-          }
-        </span>
-
-        <span className="question-type-chip">
-          {getQuestionTypeLabel(
-            room.questionType
-          )}
-        </span>
+        <Clock
+          seconds={secondsRemaining}
+          reading={!answersOpen}
+          readingProgress={readingProgress}
+          size={84}
+        />
       </section>
 
-      <section className="timer-section">
-        <div
-          className={`timer-ring ${
-            timerDanger
-              ? "timer-danger"
-              : ""
-          }`}
-          style={{
-            background: `conic-gradient(
-              currentColor ${timerPercent}%,
-              rgba(255,255,255,0.1) ${timerPercent}%
-            )`,
-          }}
-        >
-          <div className="timer-ring-inner">
-            <strong>
-              {
-                secondsRemaining
-              }
-            </strong>
-
-            <span>
-              SEC
-            </span>
-          </div>
-        </div>
-
-        {(currentPlayer
-          .timePenalty ??
-          0) > 0 && (
-          <div className="penalty-chip">
-            ⚡ -
-            {
-              currentPlayer
-                .timePenalty
-            }
-            s
-          </div>
-        )}
-      </section>
-
-      <section className="question-card">
-        <p className="question-label">
-          QUESTION
-        </p>
-
-        <h1>
-          {room.question ??
-            "Loading question..."}
-        </h1>
-      </section>
-
-      <section className="answer-grid">
-        {room.choices?.map(
-          (
-            choice,
-            index
-          ) => {
-            if (
-              hiddenAnswers.includes(
-                index
-              )
-            ) {
-              return null;
-            }
-
-            const isSelected =
-              selectedAnswer ===
-              index;
-
-            return (
-              <button
-                key={index}
-                className={`answer-card answer-${index} ${
-                  isSelected
-                    ? "answer-selected"
-                    : ""
-                }`}
-                onClick={() =>
-                  handleAnswer(
-                    index
-                  )
-                }
-                disabled={
-                  selectedAnswer !==
-                    null ||
-                  secondsRemaining <=
-                    0
-                }
-              >
-                <span className="answer-letter">
-                  {String.fromCharCode(
-                    65 + index
-                  )}
-                </span>
-
-                <span className="answer-text">
-                  {choice}
-                </span>
-
-                {isSelected && (
-                  <span className="answer-lock">
-                    🔒
-                  </span>
-                )}
-              </button>
-            );
-          }
-        )}
-      </section>
-
-      {selectedAnswer !==
-        null && (
-        <div className="locked-banner">
-          🔒 Answer
-          locked in
+      {(currentPlayer.timePenalty ?? 0) > 0 && (
+        <div className="banner banner-bad">
+          <Icon name="bolt" />
+          Lag spike: {currentPlayer.timePenalty} seconds off your clock
         </div>
       )}
 
-      {secondsRemaining ===
-        0 &&
-        selectedAnswer ===
-          null && (
-          <div className="times-up-banner">
-            ⏱️ Time's
-            up!
-          </div>
-        )}
+      <p className="phone-question">{room.question}</p>
 
-      <section className="ability-panel">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">
-              YOUR LOADOUT
-            </p>
+      {room.codeSnippet && (
+        <p className="muted">The code is on the big screen.</p>
+      )}
 
-            <h2>
-              Power-Ups
-            </h2>
-          </div>
+      {!answersOpen && (
+        <div className="listen">
+          <Icon name="ear" />
+          Answers unlock when the question has been read.
         </div>
+      )}
 
-        {room.currentRound >=
-          10 && (
-          <div className="firewall-active-banner">
-            🏁 FINAL ROUND ·
-            Lag Spike and Firewall
-            cannot be queued
-          </div>
-        )}
+      <section
+        className={`tiles ${longChoices ? "tiles-long" : ""} ${answerLocked && selectedAnswer === null ? "tiles-locked" : ""}`}
+        aria-label="Answers"
+      >
+        {room.choices.map((choice, index) => {
+          if (hiddenAnswers.includes(index)) {
+            return null;
+          }
 
-        <div className="ability-grid">
-          <button
-            className="ability-card ability-comeback"
-            onClick={
-              handleFiftyFifty
-            }
-            disabled={
-              (currentPlayer
-                .fiftyFifty ??
-                0) <= 0 ||
-              selectedAnswer !==
-                null ||
-              secondsRemaining <=
-                0 ||
-              hiddenAnswers.length >
-                0
-            }
-          >
-            <div className="ability-icon">
-              🔥
-            </div>
+          const isSelected = selectedAnswer === index;
 
-            <strong>
-              50 / 50
-            </strong>
-
-            <span>
-              Remove 2 wrong
-              answers now
-            </span>
-
-            <div className="ability-count">
-              {
-                currentPlayer
-                  .fiftyFifty ??
-                0
-              }
-              x
-            </div>
-          </button>
-
-          <button
-            className="ability-card ability-firewall"
-            onClick={
-              handleFirewall
-            }
-            disabled={
-              room.currentRound >=
-                10 ||
-              queuedFirewall ||
-              (currentPlayer
-                .firewall ??
-                0) <= 0 ||
-              selectedAnswer !==
-                null ||
-              secondsRemaining <=
-                0
-            }
-          >
-            <div className="ability-icon">
-              🛡️
-            </div>
-
-            <strong>
-              Firewall
-            </strong>
-
-            <span>
-              Next round: block
-              one attack
-            </span>
-
-            <div className="ability-count">
-              {
-                currentPlayer
-                  .firewall ??
-                0
-              }
-              x
-            </div>
-          </button>
-        </div>
-
-        {currentPlayer
-          .firewallActive && (
-          <div className="firewall-active-banner">
-            🛡️ FIREWALL
-            ACTIVE
-          </div>
-        )}
-      </section>
-
-      <section className="sabotage-panel">
-        <p className="eyebrow">
-          DISRUPTION
-        </p>
-
-        <h2>
-          Attack a Rival
-        </h2>
-
-        {(currentPlayer
-          .lagSpike ??
-          0) > 0 ? (
-          <div className="target-list">
-            {players
-              .filter(
-                (player) =>
-                  player._id !==
-                  currentPlayer._id
-              )
-              .map(
-                (player) => (
-                  <button
-                    key={
-                      player._id
-                    }
-                    className="target-button"
-                    onClick={() =>
-                      handleLagSpike(
-                        player._id,
-                        player.name
-                      )
-                    }
-                    disabled={
-                      room.currentRound >=
-                        10 ||
-                      selectedAnswer !==
-                        null ||
-                      secondsRemaining <=
-                        0 ||
-                      (currentPlayer
-                        .lagSpike ??
-                        0) <= 0
-                    }
-                  >
-                    <span>
-                      ⚡
-                    </span>
-
-                    <div>
-                      <strong>
-                        Lag Spike
-                      </strong>
-
-                      <small>
-                        {player.name} ·
-                        next round -5s
-                      </small>
-                    </div>
-
-                    <span className="target-arrow">
-                      →
-                    </span>
-                  </button>
-                )
+          return (
+            <button
+              key={index}
+              type="button"
+              className={`tile tile-${index} ${isSelected ? "tile-selected" : ""}`}
+              onClick={() => handleAnswer(index)}
+              disabled={answerLocked}
+              aria-pressed={isSelected}
+            >
+              <span className="tile-key">{String.fromCharCode(65 + index)}</span>
+              <span className="tile-text">{choice}</span>
+              {isSelected && (
+                <span className="tile-mark">
+                  <Icon name="lock" />
+                </span>
               )}
-          </div>
-        ) : (
-          <div className="empty-sabotage">
-            ⚡ Lag Spike
-            used
+            </button>
+          );
+        })}
+      </section>
+
+      {selectedAnswer !== null && (
+        <div className="banner banner-gold">
+          <Icon name="lock" />
+          Answer locked in
+        </div>
+      )}
+
+      {timeUp && selectedAnswer === null && (
+        <div className="banner banner-bad">
+          <Icon name="clock" />
+          Time's up
+        </div>
+      )}
+
+      <section>
+        <div className="section-title">
+          Power-ups
+          {finalRound && <small>Final round: no new attacks or shields</small>}
+        </div>
+
+        <div className="powerups">
+          <button
+            type="button"
+            className="powerup"
+            onClick={handleFiftyFifty}
+            disabled={
+              (currentPlayer.fiftyFifty ?? 0) <= 0 ||
+              selectedAnswer !== null ||
+              timeUp ||
+              hiddenAnswers.length > 0
+            }
+          >
+            <span className="powerup-icon">
+              <Icon name="split" />
+            </span>
+            <span>
+              <strong>50/50</strong>
+              <small>Remove two wrong answers</small>
+            </span>
+            <span className="powerup-count">{currentPlayer.fiftyFifty ?? 0}</span>
+          </button>
+
+          <button
+            type="button"
+            className="powerup powerup-shield"
+            onClick={handleFirewall}
+            disabled={
+              finalRound ||
+              queuedFirewall ||
+              (currentPlayer.firewall ?? 0) <= 0 ||
+              selectedAnswer !== null ||
+              timeUp
+            }
+          >
+            <span className="powerup-icon">
+              <Icon name="shield" />
+            </span>
+            <span>
+              <strong>Firewall</strong>
+              <small>Blocks one attack next round</small>
+            </span>
+            <span className="powerup-count">{currentPlayer.firewall ?? 0}</span>
+          </button>
+        </div>
+
+        {currentPlayer.firewallActive && (
+          <div className="banner banner-good" style={{ marginTop: 10 }}>
+            <Icon name="shield" />
+            Firewall is up this round
           </div>
         )}
       </section>
+
+      {rivals.length > 0 && (
+        <section>
+          <div className="section-title">
+            Lag spike a rival
+            <small>{(currentPlayer.lagSpike ?? 0) > 0 ? "5 s off their next round" : "Used"}</small>
+          </div>
+
+          {(currentPlayer.lagSpike ?? 0) > 0 && (
+            <div className="rivals">
+              {rivals.map((player) => (
+                <button
+                  key={player._id}
+                  type="button"
+                  className="rival"
+                  onClick={() => handleLagSpike(player._id, player.name)}
+                  disabled={
+                    finalRound ||
+                    selectedAnswer !== null ||
+                    timeUp ||
+                    (currentPlayer.lagSpike ?? 0) <= 0
+                  }
+                >
+                  <Icon name="bolt" />
+                  <span>
+                    <strong>{player.name}</strong>
+                    <small>{player.score} pts</small>
+                  </span>
+                  <span className="muted">Send</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
     </main>
   );
+}
+
+function ordinal(n: number) {
+  const tens = n % 100;
+
+  if (tens >= 11 && tens <= 13) {
+    return "th";
+  }
+
+  return ["th", "st", "nd", "rd"][n % 10] ?? "th";
 }
 
 export default PlayerGamePage;

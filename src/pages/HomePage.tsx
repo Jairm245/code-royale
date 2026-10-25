@@ -1,127 +1,37 @@
 import { useNavigate } from "react-router-dom";
 
+import { Icon } from "../components/Icon";
+
 function HomePage() {
   const navigate = useNavigate();
 
   return (
-    <main className="player-game-shell">
-      <section className="entry-screen">
-        <div className="entry-brand">
-          <div className="entry-brand-icon">
-            👑
-          </div>
+    <main className="shell shell-phone">
+      <section className="entry">
+        <h1 className="entry-title">
+          <Icon name="crown" />
+          Code
+          <br />
+          Royale
+        </h1>
 
-          <p className="eyebrow">
-            CODE ROYALE
-          </p>
-
-          <h1>
-            Coding interviews,
-            turned into a battle.
-          </h1>
-
-          <p className="entry-subtitle">
-            AI-generated challenges,
-            live scoring, power-ups,
-            sabotage, and comeback mechanics.
-          </p>
-        </div>
+        <p className="entry-lede">
+          The coding interview game show. Host on the big screen, play from your phone.
+        </p>
 
         <div className="entry-actions">
-          <button
-            className="entry-primary-action"
-            onClick={() =>
-              navigate("/create")
-            }
-          >
-            <span className="entry-action-icon">
-              👑
-            </span>
-
-            <div>
-              <strong>
-                Host Game
-              </strong>
-
-              <small>
-                Create a room and run the arena
-              </small>
-            </div>
-
-            <span className="entry-action-arrow">
-              →
-            </span>
+          <button type="button" className="btn btn-gold btn-lg btn-block" onClick={() => navigate("/create")}>
+            <Icon name="play" />
+            Host a game
           </button>
 
-          <button
-            className="entry-secondary-action"
-            onClick={() =>
-              navigate("/join")
-            }
-          >
-            <span className="entry-action-icon">
-              ⚡
-            </span>
-
-            <div>
-              <strong>
-                Join Game
-              </strong>
-
-              <small>
-                Enter a room code and compete
-              </small>
-            </div>
-
-            <span className="entry-action-arrow">
-              →
-            </span>
+          <button type="button" className="btn btn-lg btn-block" onClick={() => navigate("/join")}>
+            <Icon name="phone" />
+            Join a game
           </button>
         </div>
 
-        <div className="entry-feature-row">
-          <div className="entry-feature">
-            <span>🤖</span>
-
-            <div>
-              <strong>
-                AI Questions
-              </strong>
-
-              <small>
-                Fresh coding challenges
-              </small>
-            </div>
-          </div>
-
-          <div className="entry-feature">
-            <span>🔥</span>
-
-            <div>
-              <strong>
-                Comebacks
-              </strong>
-
-              <small>
-                50/50 boosts for last place
-              </small>
-            </div>
-          </div>
-
-          <div className="entry-feature">
-            <span>⚡</span>
-
-            <div>
-              <strong>
-                Disruption
-              </strong>
-
-              <small>
-                Lag Spike and Firewall
-              </small>
-            </div>
-          </div>
-        </div>
+        <p className="muted">Ten rounds, up to eight players.</p>
       </section>
     </main>
   );

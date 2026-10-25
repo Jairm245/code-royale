@@ -1,8 +1,114 @@
+import { toSpeakable } from "./speakable";
+import { setVoiceActive } from "./sfx";
+
 let activeAudio:
   HTMLAudioElement | null =
   null;
 
 let playbackToken = 0;
+
+/*
+  If streamed speech hasn't started playing within this
+  time, give up on it and let the caller fall back to the
+  browser voice instead of leaving the screen waiting.
+*/
+const VOICE_START_TIMEOUT_MS =
+  3200;
+
+/*
+  Prefetched clips, keyed by stream URL. A clip requested
+  while the previous question/scene is still on screen is
+  usually fully buffered by the time it is needed, so it
+  starts instantly.
+*/
+const voiceCache =
+  new Map<
+    string,
+    HTMLAudioElement
+  >();
+
+const MAX_CACHED_CLIPS =
+  12;
+
+export function prefetchStreamingVoice(
+  text: string,
+  sceneType: string
+) {
+  try {
+    const url =
+      getStreamingVoiceUrl(
+        text,
+        sceneType
+      );
+
+    if (
+      voiceCache.has(url)
+    ) {
+      return;
+    }
+
+    const audio =
+      new Audio(url);
+
+    audio.preload =
+      "auto";
+
+    audio.onerror =
+      () => {
+        voiceCache.delete(
+          url
+        );
+      };
+
+    audio.load();
+    voiceCache.set(
+      url,
+      audio
+    );
+
+    while (
+      voiceCache.size >
+      MAX_CACHED_CLIPS
+    ) {
+      const oldest =
+        voiceCache.keys().next()
+          .value;
+
+      if (
+        oldest ===
+        undefined
+      ) {
+        break;
+      }
+
+      voiceCache.delete(
+        oldest
+      );
+    }
+  } catch {
+    /* prefetch is best-effort */
+  }
+}
+
+function takeCachedAudio(
+  url: string
+) {
+  const cached =
+    voiceCache.get(url);
+
+  voiceCache.delete(url);
+
+  if (
+    cached &&
+    !cached.error
+  ) {
+    cached.onerror =
+      null;
+    return cached;
+  }
+
+  return undefined;
+}
 
 const MAX_STREAM_TEXT_CHARS =
   1200;
@@ -112,8 +218,11 @@ export function getStreamingVoiceUrl(
   sceneType:
     string = "coach"
 ) {
+  /* say "equals", not "equals equals" */
   const narration =
-    text.trim();
+    toSpeakable(
+      text.trim()
+    );
 
   if (!narration) {
     throw new Error(
@@ -171,9 +280,20 @@ export async function playGeneratedVoice(
     ++playbackToken;
 
   const audio =
+    takeCachedAudio(
+      url
+    ) ??
     new Audio(
       url
     );
+
+  let started =
+    false;
+
+  let startTimer:
+    ReturnType<
+      typeof setTimeout
+    > | undefined;
 
   activeAudio =
     audio;
@@ -257,6 +377,7 @@ export async function playGeneratedVoice(
   const cleanup =
     () => {
       stopProgressLoop();
+      setVoiceActive(false);
       if (
         activeAudio ===
         audio
@@ -273,6 +394,17 @@ export async function playGeneratedVoice(
         playbackToken
       ) {
         return;
+      }
+
+      started =
+        true;
+
+      setVoiceActive(true);
+
+      if (startTimer) {
+        clearTimeout(
+          startTimer
+        );
       }
 
       options.onStart?.();
@@ -333,11 +465,42 @@ export async function playGeneratedVoice(
       );
     };
 
+  startTimer =
+    setTimeout(
+      () => {
+        if (
+          started ||
+          token !==
+            playbackToken
+        ) {
+          return;
+        }
+
+        /* invalidate this playback, then hand over to the fallback */
+        playbackToken += 1;
+        audio.pause();
+        cleanup();
+
+        options.onError?.(
+          new Error(
+            "Voice took too long to start."
+          )
+        );
+      },
+      VOICE_START_TIMEOUT_MS
+    );
+
   try {
     await audio.play();
   } catch (
     error
   ) {
+    if (startTimer) {
+      clearTimeout(
+        startTimer
+      );
+    }
+
     cleanup();
 
     if (
@@ -427,6 +590,7 @@ export async function playStreamingVoice(
 
 export function stopGeneratedVoice() {
   playbackToken += 1;
+  setVoiceActive(false);
 
   if (
     !activeAudio

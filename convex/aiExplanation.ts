@@ -6,6 +6,24 @@ import {
   v,
 } from "convex/values";
 
+import {
+  chooseVisualKind,
+  detectConcept,
+  getReferencePack,
+  isHeapConcept,
+  renderPackForCoach,
+  type ConceptId,
+} from "./referencePacks";
+
+import {
+  ENGINE_KINDS,
+  getEngineForKind,
+  extractProblemEdges,
+  parseDequeWindow,
+  parseGraph,
+  parseHashOperation,
+} from "./structureEngines";
+
 /* ========================================
    TYPES
 ======================================== */
@@ -462,6 +480,7 @@ function sanitizeVisual(
       "hashmap",
       "stack",
       "tree",
+      ...ENGINE_KINDS,
       "code",
       "complexity",
       "takeaway",
@@ -558,6 +577,55 @@ function sanitizeVisual(
   ) {
     visual.reasoningSteps =
       reasoningSteps;
+  }
+
+  const isArrayKind =
+    kind === "array" ||
+    kind === "pointers";
+
+  /*
+    An explicitly empty input array is a real edge
+    case ("what if nums = []?"). Keep it so the
+    renderer can draw [ ] instead of nothing.
+  */
+  if (
+    isArrayKind &&
+    Array.isArray(
+      raw.values
+    ) &&
+    raw.values.length ===
+      0
+  ) {
+    visual.values = [];
+  }
+
+  /*
+    Phrases are not array elements. If the model put
+    sentences into an array, show them as a reasoning
+    list instead of cramming them into cells.
+  */
+  if (
+    isArrayKind &&
+    visual.values &&
+    visual.values.some(
+      (value) =>
+        value.length > 16 ||
+        value
+          .trim()
+          .split(/\s+/)
+          .length >= 3
+    )
+  ) {
+    return {
+      kind: "reasoning",
+      reasoningSteps:
+        visual.values.slice(
+          0,
+          6
+        ),
+      operation:
+        visual.operation,
+    };
   }
 
   return visual;
@@ -767,11 +835,21 @@ function sanitizeExplanation(
       : [];
 
   const rawScenes =
-    Array.isArray(
-      raw.scenes
-    )
-      ? raw.scenes
-      : [];
+    questionType ===
+    "bug_hunt"
+      ? prepareBugHuntScenes(
+          Array.isArray(
+            raw.scenes
+          )
+            ? raw.scenes
+            : [],
+          codeSnippet
+        )
+      : Array.isArray(
+            raw.scenes
+          )
+        ? raw.scenes
+        : [];
 
   const scenes =
     rawScenes
@@ -840,11 +918,65 @@ function sanitizeExplanation(
   };
 }
 
+function cloneVisual(
+  visual:
+    SanitizedVisual
+): SanitizedVisual {
+  return {
+    ...visual,
+    values:
+      visual.values
+        ? [...visual.values]
+        : undefined,
+    activeIndices:
+      visual.activeIndices
+        ? [...visual.activeIndices]
+        : undefined,
+    pointers:
+      visual.pointers?.map(
+        (pointer) => ({
+          ...pointer,
+        })
+      ),
+    entries:
+      visual.entries?.map(
+        (entry) => ({
+          ...entry,
+        })
+      ),
+    stack:
+      visual.stack
+        ? [...visual.stack]
+        : undefined,
+    reasoningSteps:
+      visual.reasoningSteps
+        ? [...visual.reasoningSteps]
+        : undefined,
+  };
+}
+
+/*
+  MUST-SHOW RULE:
+  once the optimal structure is on screen it stays
+  on screen. Any later scene that would replace it
+  with a complexity card, takeaway card, reasoning
+  list, or nothing at all inherits the most recent
+  structure state instead, with its message turned
+  into the operation label.
+
+  (Previously only complexity/takeaway kinds were
+  handled, and they inherited the LAST state of the
+  whole explanation rather than the state just
+  before them. Scenes with no visual fell through
+  and dropped the structure.)
+*/
 function preservePrimaryVisualThroughEnding(
   explanation:
     SanitizedExplanation,
   questionType:
-    string | undefined
+    string | undefined,
+  concept:
+    ConceptId | "unknown"
 ) {
   /*
     Complexity questions are the one category where
@@ -859,6 +991,15 @@ function preservePrimaryVisualThroughEnding(
     return explanation;
   }
 
+  const pack =
+    getReferencePack(
+      concept
+    );
+
+  const holdAll =
+    pack?.holdStructureToEnd ??
+    false;
+
   const preferredKinds =
     new Set([
       "array",
@@ -866,29 +1007,25 @@ function preservePrimaryVisualThroughEnding(
       "hashmap",
       "stack",
       "tree",
+      ...ENGINE_KINDS,
     ]);
 
-  let primaryVisual:
+  const replaceableKinds =
+    new Set(
+      holdAll
+        ? [
+            "complexity",
+            "takeaway",
+            "reasoning",
+          ]
+        : [
+            "complexity",
+            "takeaway",
+          ]
+    );
+
+  let lastPrimary:
     SanitizedVisual | undefined;
-
-  for (
-    const scene
-    of explanation.scenes
-  ) {
-    if (
-      scene.visual &&
-      preferredKinds.has(
-        scene.visual.kind
-      )
-    ) {
-      primaryVisual =
-        scene.visual;
-    }
-  }
-
-  if (!primaryVisual) {
-    return explanation;
-  }
 
   for (
     const scene
@@ -898,11 +1035,37 @@ function preservePrimaryVisualThroughEnding(
       scene.visual?.kind;
 
     if (
-      currentKind !==
-        "complexity" &&
-      currentKind !==
-        "takeaway"
+      currentKind &&
+      preferredKinds.has(
+        currentKind
+      )
     ) {
+      lastPrimary =
+        scene.visual;
+      continue;
+    }
+
+    if (!lastPrimary) {
+      continue;
+    }
+
+    /*
+      Code scenes keep their code. A scene with no
+      visual only inherits when the pack says the
+      structure must be held.
+    */
+    if (scene.code) {
+      continue;
+    }
+
+    const shouldInherit =
+      currentKind
+        ? replaceableKinds.has(
+            currentKind
+          )
+        : holdAll;
+
+    if (!shouldInherit) {
       continue;
     }
 
@@ -913,61 +1076,971 @@ function preservePrimaryVisualThroughEnding(
       scene.text;
 
     scene.visual = {
-      ...primaryVisual,
-
-      values:
-        primaryVisual.values
-          ? [
-              ...primaryVisual.values,
-            ]
-          : undefined,
-
-      activeIndices:
-        primaryVisual.activeIndices
-          ? [
-              ...primaryVisual.activeIndices,
-            ]
-          : undefined,
-
-      pointers:
-        primaryVisual.pointers
-          ? primaryVisual.pointers.map(
-              (
-                pointer
-              ) => ({
-                ...pointer,
-              })
-            )
-          : undefined,
-
-      entries:
-        primaryVisual.entries
-          ? primaryVisual.entries.map(
-              (
-                entry
-              ) => ({
-                ...entry,
-              })
-            )
-          : undefined,
-
-      stack:
-        primaryVisual.stack
-          ? [
-              ...primaryVisual.stack,
-            ]
-          : undefined,
-
-      reasoningSteps:
-        primaryVisual.reasoningSteps
-          ? [
-              ...primaryVisual.reasoningSteps,
-            ]
-          : undefined,
-
+      ...cloneVisual(
+        lastPrimary
+      ),
       operation:
         endingLabel,
     };
+  }
+
+  return explanation;
+}
+
+/*
+  STRUCTURE ENGINE ENFORCEMENT (all engine-backed packs:
+  heap, BST, trie, graph, union-find, segment tree,
+  Fenwick tree, linked list, queue/deque)
+
+  - Every structural scene gets the concept's canonical
+    kind (a heap is never drawn with the BFS tree view;
+    a heap question about indices gets the ARRAY view).
+  - The engine repairs the starting state so it obeys
+    the invariants (complete heap, valid BST, acyclic
+    parent array, symmetric undirected graph...).
+  - Every later scene starts from the exact state the
+    previous scene's operation produced, so the whole
+    explanation is one continuous, correct structure.
+*/
+/*
+  The model often copies the prompt's sample data. When the
+  question contains its own array literal, use it unless the
+  Coach's values already match it; fill in a missing scan
+  operation (and two-sum target) from the question text.
+*/
+function tieToProblemInput(
+  visual:
+    SanitizedVisual,
+  kind:
+    string,
+  questionText:
+    string
+) {
+  const problemInput =
+    extractLikelySequence(
+      questionText,
+      ""
+    );
+
+  const coachValues =
+    (visual.values ?? []).map(
+      (value) =>
+        value.trim()
+    );
+
+  /*
+    Use the question's own array unless the Coach
+    already gave (at least) that whole array.
+  */
+  if (problemInput) {
+    const shared =
+      coachValues.filter(
+        (value) =>
+          problemInput.includes(
+            value
+          )
+      ).length;
+
+    if (
+      coachValues.length <
+        problemInput.length ||
+      shared <
+        Math.ceil(
+          coachValues.length /
+            2
+        )
+    ) {
+      visual.values =
+        problemInput.slice(
+          0,
+          8
+        );
+    }
+  }
+
+  const text =
+    questionText.toLowerCase();
+
+  if (
+    kind === "deque"
+  ) {
+    if (
+      !parseDequeWindow({
+        kind,
+        operation:
+          visual.operation,
+      }) &&
+      !/^(push|pop|append|enqueue|dequeue|poll|offer)/i.test(
+        visual.operation?.trim() ?? ""
+      ) &&
+      /window|maximum|max of/.test(
+        text
+      )
+    ) {
+      const k =
+        questionText.match(
+          /\bk\s*=\s*(\d+)/i
+        )?.[1] ??
+        questionText.match(
+          /(?:window\s+)?size\s+(?:of\s+)?(\d+)/i
+        )?.[1] ??
+        "3";
+
+      visual.operation =
+        `Window max k = ${k}`;
+    }
+
+    return;
+  }
+
+  /*
+    Hash scans build their table from the input, so
+    any sample entries the model copied are dropped.
+  */
+  if (
+    visual.values?.length
+  ) {
+    visual.entries = [];
+  }
+
+  const target =
+    questionText.match(
+      /target\s*(?:=|of|is)?\s*(-?\d+)/i
+    )?.[1] ??
+    questionText.match(
+      /sums?\s+(?:up\s+)?to\s+(-?\d+)/i
+    )?.[1];
+
+  const parsed =
+    parseHashOperation({
+      kind,
+      operation:
+        visual.operation,
+    });
+
+  if (
+    parsed &&
+    parsed.type !==
+      "direct"
+  ) {
+    return;
+  }
+
+  /* missing or prose operation: infer the scan pattern from the question */
+  if (
+    target &&
+    /sum|complement|pair|add up/.test(
+      text
+    )
+  ) {
+    visual.operation =
+      `Two sum target ${target}`;
+  } else if (
+    /count|frequen|most common|anagram|occurr/.test(
+      text
+    )
+  ) {
+    visual.operation =
+      "Count frequencies";
+  } else if (
+    /duplicate|repeat|seen|unique|contains/.test(
+      text
+    )
+  ) {
+    visual.operation =
+      "Detect duplicate";
+  }
+}
+
+/*
+  Graphs must show the QUESTION's graph with real
+  neighbor lists. If the question spells out its edges
+  and the Coach's adjacency list is empty or missing those
+  vertices, rebuild it from the question. A representation
+  scene without an operation builds the list edge by edge.
+*/
+function tieGraphToProblem(
+  visual:
+    SanitizedVisual,
+  kind:
+    string,
+  concept:
+    ConceptId | "unknown",
+  questionText:
+    string,
+  isFirstGraphScene:
+    boolean
+) {
+  const fromProblem =
+    extractProblemEdges(
+      questionText
+    );
+
+  const coachGraph =
+    parseGraph({
+      kind,
+      entries:
+        visual.entries,
+    });
+
+  const coachEdges =
+    coachGraph
+      ? [
+          ...coachGraph.adjacency.values(),
+        ].reduce(
+          (sum, list) =>
+            sum + list.length,
+          0
+        )
+      : 0;
+
+  if (fromProblem) {
+    const problemVertices =
+      fromProblem.map(
+        (entry) =>
+          entry.key
+      );
+
+    const covered =
+      coachGraph
+        ? problemVertices.filter(
+            (vertex) =>
+              coachGraph.adjacency.has(
+                vertex
+              )
+          ).length
+        : 0;
+
+    if (
+      coachEdges ===
+        0 ||
+      covered <
+        problemVertices.length
+    ) {
+      visual.entries =
+        fromProblem;
+    }
+  }
+
+  const label =
+    visual.operation?.trim() ??
+    "";
+
+  /* only the first graph scene builds; later scenes hold the finished list */
+  if (
+    concept ===
+      "graph_representation" &&
+    isFirstGraphScene &&
+    !/^(build|construct|add|neighbou?rs|adjacent|list|bfs|dfs|breadth|depth|topo|kahn|dijkstra|shortest)/i.test(
+      label
+    )
+  ) {
+    visual.operation =
+      "Build adjacency list";
+  }
+}
+
+/*
+  Retire the old static "hashmap" visual (generic table +
+  hash-function pipeline). Every hash map/set scene, for
+  ANY concept, becomes the engine-backed hash_map/hash_set
+  view tied to the problem's own input.
+*/
+function upgradeLegacyHashVisuals(
+  explanation:
+    SanitizedExplanation,
+  questionType:
+    string | undefined,
+  questionText:
+    string,
+  concept:
+    ConceptId | "unknown"
+) {
+  /* graph concepts own their adjacency "maps" */
+  if (
+    questionType ===
+      "bug_hunt" ||
+    concept.startsWith(
+      "graph"
+    ) ||
+    concept ===
+      "topological_sort" ||
+    concept ===
+      "shortest_path"
+  ) {
+    return explanation;
+  }
+
+  let carried:
+    SanitizedVisual | undefined;
+
+  for (
+    const scene
+    of explanation.scenes
+  ) {
+    const visual =
+      scene.visual;
+
+    if (
+      !visual ||
+      (visual.kind !==
+        "hashmap" &&
+        visual.kind !==
+          "hash_map" &&
+        visual.kind !==
+          "hash_set")
+    ) {
+      continue;
+    }
+
+    const kind =
+      visual.kind ===
+      "hashmap"
+        ? chooseVisualKind(
+            "hash_map",
+            questionText,
+            undefined
+          ) ??
+          "hash_map"
+        : visual.kind;
+
+    tieToProblemInput(
+      visual,
+      kind,
+      questionText
+    );
+
+    const engine =
+      getEngineForKind(
+        kind
+      );
+
+    const start =
+      carried &&
+      carried.kind ===
+        kind &&
+      !visual.values?.length
+        ? {
+            ...carried,
+            operation:
+              visual.operation,
+          }
+        : {
+            ...visual,
+            kind,
+          };
+
+    const normalized =
+      engine?.normalize(
+        start
+      );
+
+    if (
+      !engine ||
+      !normalized
+    ) {
+      continue;
+    }
+
+    scene.visual = {
+      ...normalized,
+      kind,
+      operation:
+        visual.operation,
+    };
+
+    carried = {
+      ...engine.plan(
+        scene.visual
+      ).end,
+      kind,
+    };
+  }
+
+  return explanation;
+}
+
+function enforceStructureVisuals(
+  explanation:
+    SanitizedExplanation,
+  concept:
+    ConceptId | "unknown",
+  questionType:
+    string | undefined,
+  questionText:
+    string
+) {
+  if (
+    questionType ===
+    "bug_hunt"
+  ) {
+    return explanation;
+  }
+
+  const pack =
+    getReferencePack(
+      concept
+    );
+
+  if (!pack) {
+    return explanation;
+  }
+
+  const textOnlyKinds =
+    new Set([
+      "reasoning",
+      "code",
+      "complexity",
+      "takeaway",
+    ]);
+
+  let carried:
+    SanitizedVisual | undefined;
+
+  for (
+    const scene
+    of explanation.scenes
+  ) {
+    const visual =
+      scene.visual;
+
+    if (
+      !visual ||
+      textOnlyKinds.has(
+        visual.kind
+      )
+    ) {
+      continue;
+    }
+
+    const kind =
+      chooseVisualKind(
+        concept,
+        questionText,
+        visual.kind
+      ) ??
+      visual.kind;
+
+    const engine =
+      getEngineForKind(
+        kind
+      );
+
+    if (!engine) {
+      /*
+        Stack pack (no engine): a stack question must
+        never be drawn as a tree. Turn tree data into
+        the stack contents; keep an array as the source
+        input beside an (initially empty) stack.
+      */
+      if (
+        concept === "stack" &&
+        visual.kind !== "stack"
+      ) {
+        const items =
+          (visual.values ?? [])
+            .map((value) => value.trim())
+            .filter(
+              (value) =>
+                value !== "" &&
+                value.toLowerCase() !== "null"
+            );
+
+        scene.visual = {
+          kind: "stack",
+          values:
+            visual.kind === "tree"
+              ? undefined
+              : items,
+          activeIndices:
+            visual.kind === "tree"
+              ? undefined
+              : visual.activeIndices,
+          stack:
+            visual.stack ??
+            (visual.kind === "tree"
+              ? items
+              : []),
+          operation:
+            visual.operation,
+        };
+      }
+
+      continue;
+    }
+
+    /*
+      Tie input-driven structures to THIS problem:
+      hash map/set scans and the monotonic deque read
+      the question's own array instead of a generic
+      example the model copied.
+    */
+    if (
+      kind === "hash_map" ||
+      kind === "hash_set" ||
+      kind === "deque"
+    ) {
+      tieToProblemInput(
+        visual,
+        kind,
+        questionText
+      );
+    }
+
+    if (
+      kind === "graph" ||
+      kind === "digraph"
+    ) {
+      tieGraphToProblem(
+        visual,
+        kind,
+        concept,
+        questionText,
+        !carried
+      );
+    }
+
+    /*
+      Start from the previous scene's END state when
+      there is one (same kind), otherwise from what
+      the Coach supplied.
+    */
+    const startData =
+      carried &&
+      carried.kind ===
+        kind
+        ? carried
+        : visual;
+
+    const normalized =
+      engine.normalize({
+        ...startData,
+        kind,
+        operation:
+          visual.operation,
+        pointers:
+          visual.pointers ??
+          startData.pointers,
+      });
+
+    if (!normalized) {
+      continue;
+    }
+
+    scene.visual = {
+      ...normalized,
+      kind,
+      operation:
+        visual.operation,
+    };
+
+    carried = {
+      ...engine.plan(
+        scene.visual
+      ).end,
+      kind,
+    };
+  }
+
+  return explanation;
+}
+
+/* ========================================
+   BUG HUNT — CORRECTED CODE GUARANTEE
+======================================== */
+
+function normalizeForCompare(
+  code: string | undefined
+) {
+  return (code ?? "")
+    .replace(/\\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+/*
+  The model names the fix scene many ways
+  ("corrected", "fix", "solution") and sometimes
+  returns more than 4 scenes. Normalize the type to
+  "corrected_code" and make sure the fix survives the
+  4-scene cap by moving it to the end of the first 4.
+*/
+function prepareBugHuntScenes(
+  scenes: unknown[],
+  originalCode: string | undefined
+) {
+  const original =
+    normalizeForCompare(
+      originalCode
+    );
+
+  let correctedIndex =
+    -1;
+
+  scenes.forEach(
+    (scene, index) => {
+      if (
+        !scene ||
+        typeof scene !==
+          "object"
+      ) {
+        return;
+      }
+
+      const item =
+        scene as RawScene;
+
+      const type =
+        typeof item.type ===
+        "string"
+          ? item.type.toLowerCase()
+          : "";
+
+      const code =
+        typeof item.code ===
+        "string"
+          ? normalizeForCompare(
+              item.code
+            )
+          : "";
+
+      const namedFix =
+        /correct|fix|repair|solution|after/.test(
+          type
+        );
+
+      const differentCode =
+        code !== "" &&
+        original !== "" &&
+        code !== original;
+
+      if (
+        (namedFix &&
+          code !== "") ||
+        (differentCode &&
+          index ===
+            scenes.length - 1)
+      ) {
+        correctedIndex =
+          index;
+      }
+    }
+  );
+
+  if (
+    correctedIndex <
+    0
+  ) {
+    return scenes.slice(
+      0,
+      4
+    );
+  }
+
+  const corrected = {
+    ...(scenes[
+      correctedIndex
+    ] as RawScene),
+    type: "corrected_code",
+  };
+
+  return [
+    ...scenes
+      .filter(
+        (_, index) =>
+          index !==
+          correctedIndex
+      )
+      .slice(0, 3),
+    corrected,
+  ];
+}
+
+/* first 1-based line where the fix differs from the original */
+function firstChangedLine(
+  original: string,
+  corrected: string
+) {
+  const before =
+    original.split("\n");
+  const after =
+    corrected.split("\n");
+
+  for (
+    let index = 0;
+    index < after.length;
+    index += 1
+  ) {
+    if (
+      (before[index] ?? "").trim() !==
+      after[index].trim()
+    ) {
+      return index + 1;
+    }
+  }
+
+  return undefined;
+}
+
+async function requestCorrectedCode(
+  apiKey: string,
+  question: string,
+  correctChoice: string,
+  originalCode: string
+) {
+  try {
+    const response =
+      await fetch(
+        "https://api.openai.com/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            temperature: 0,
+            response_format: {
+              type: "json_object",
+            },
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You fix exactly one bug in a short code snippet. Return JSON only.",
+              },
+              {
+                role: "user",
+                content: `QUESTION:\n${question}\n\nTHE BUG (correct answer):\n${correctChoice}\n\nBUGGY CODE:\n${originalCode}\n\nReturn {"correctedCode": "..."} with the COMPLETE corrected snippet. Change only what fixes the bug; keep the language, names, structure and line breaks.`,
+              },
+            ],
+          }),
+        }
+      );
+
+    if (!response.ok) {
+      return undefined;
+    }
+
+    const payload: any =
+      await response.json();
+
+    const parsed =
+      JSON.parse(
+        stripJsonFences(
+          payload?.choices?.[0]?.message?.content ??
+            "{}"
+        )
+      );
+
+    return typeof parsed.correctedCode ===
+      "string"
+      ? parsed.correctedCode
+      : undefined;
+  } catch (error) {
+    console.error(
+      "Corrected-code request failed:",
+      error
+    );
+    return undefined;
+  }
+}
+
+/*
+  Guarantees the Bug Hunt ending: a corrected_code
+  scene whose code is the full fixed snippet and is
+  actually DIFFERENT from the buggy original.
+  Sources, in order: the scene the Coach wrote, the
+  Coach's top-level "correctedCode", a dedicated
+  follow-up request.
+*/
+async function ensureCorrectedCode(
+  explanation:
+    SanitizedExplanation,
+  options: {
+    apiKey: string;
+    question: string;
+    correctChoice: string;
+    originalCode: string;
+    coachCorrectedCode: unknown;
+  }
+) {
+  const original =
+    normalizeForCompare(
+      options.originalCode
+    );
+
+  if (!original) {
+    return explanation;
+  }
+
+  const isRealFix = (
+    code: string | undefined
+  ) => {
+    const normalized =
+      normalizeForCompare(
+        code
+      );
+
+    return (
+      normalized !== "" &&
+      normalized !== original
+    );
+  };
+
+  const existing =
+    explanation.scenes.find(
+      (scene) =>
+        scene.type ===
+        "corrected_code"
+    );
+
+  if (
+    existing &&
+    isRealFix(
+      existing.code
+    )
+  ) {
+    existing.highlightLine ??=
+      firstChangedLine(
+        options.originalCode,
+        existing.code ?? ""
+      );
+
+    return explanation;
+  }
+
+  let fixedCode =
+    typeof options.coachCorrectedCode ===
+      "string" &&
+    isRealFix(
+      options.coachCorrectedCode
+    )
+      ? options.coachCorrectedCode
+      : undefined;
+
+  if (!fixedCode) {
+    const requested =
+      await requestCorrectedCode(
+        options.apiKey,
+        options.question,
+        options.correctChoice,
+        options.originalCode
+      );
+
+    fixedCode =
+      isRealFix(
+        requested
+      )
+        ? requested
+        : undefined;
+  }
+
+  if (!fixedCode) {
+    return explanation;
+  }
+
+  const code =
+    normalizeCode(
+      fixedCode.replace(
+        /\\n/g,
+        "\n"
+      )
+    ) ?? fixedCode;
+
+  const highlightLine =
+    firstChangedLine(
+      options.originalCode,
+      code
+    );
+
+  if (existing) {
+    existing.code =
+      code;
+    existing.highlightLine =
+      highlightLine;
+    existing.visual = {
+      kind: "code",
+    };
+    return explanation;
+  }
+
+  explanation.scenes.push({
+    type: "corrected_code",
+    title: "The Fix",
+    text: "Corrected code",
+    narration:
+      compactNarration(
+        `Here's the fix: ${options.correctChoice}`
+      ),
+    code,
+    highlightLine,
+    visual: {
+      kind: "code",
+    },
+  });
+
+  return explanation;
+}
+
+/*
+  The bug line is computed, not guessed: it is the first
+  line where the fixed code differs from the original.
+  Every scene before the fix points at that line, so the
+  animation can scan to it and mark it.
+*/
+function pinBugLine(
+  explanation:
+    SanitizedExplanation,
+  questionType:
+    string | undefined,
+  originalCode:
+    string
+) {
+  if (
+    questionType !==
+      "bug_hunt" ||
+    !originalCode
+  ) {
+    return explanation;
+  }
+
+  const corrected =
+    explanation.scenes.find(
+      (scene) =>
+        scene.type ===
+          "corrected_code" &&
+        scene.code
+    );
+
+  const bugLine =
+    corrected?.code
+      ? firstChangedLine(
+          originalCode,
+          corrected.code
+        )
+      : undefined;
+
+  if (!bugLine) {
+    return explanation;
+  }
+
+  for (
+    const scene
+    of explanation.scenes
+  ) {
+    if (
+      scene.type !==
+      "corrected_code"
+    ) {
+      scene.highlightLine =
+        bugLine;
+      scene.highlightText =
+        undefined;
+    }
   }
 
   return explanation;
@@ -1131,7 +2204,16 @@ EDGE CASE FOCUS:
 - Give one concrete input/state that breaks the tempting solution.
 - Walk through exactly what happens on that input.
 - Explain what condition/check the correct solution needs.
-- Prefer array, pointers, code, or reasoning visuals.`;
+
+EDGE CASE VISUAL CONTRACT — REQUIRED:
+- Scene 1 MUST draw the breaking input itself with visual.kind = "array" (or "pointers"):
+  visual.values = the exact input elements, e.g. ["5"], ["2","2","2"], ["-3","0","4"].
+  For an EMPTY input use "values": [] — it is drawn as [ ] (do not omit values).
+  visual.operation = what goes wrong in a few words, e.g. "nums[0] crashes — n = 0".
+- Values are single elements only (numbers, characters, short words). Never put sentences in values.
+- Scene 2 shows the guard/check that fixes it: a code scene with highlightLine on the check,
+  or the same array with operation describing the check.
+- Never leave a scene without data to draw.`;
 
     default:
       return `
@@ -1151,157 +2233,17 @@ function detectOptimalTechnique(
     string,
   codeSnippet:
     string
-) {
-  const combined =
-    `${question}
-${correctChoice}
-${codeSnippet}`
-      .toLowerCase();
-
-  if (
-    combined.includes(
-      "sliding window"
-    ) ||
-    combined.includes(
-      "window size"
-    ) ||
-    combined.includes(
-      "window of size"
-    )
-  ) {
-    return "sliding_window" as const;
-  }
-
-  if (
-    combined.includes(
-      "two pointers"
-    ) ||
-    combined.includes(
-      "two-pointers"
-    ) ||
-    (
-      combined.includes(
-        "left"
-      ) &&
-      combined.includes(
-        "right"
-      ) &&
-      (
-        combined.includes(
-          "pair"
-        ) ||
-        combined.includes(
-          "sorted"
-        ) ||
-        combined.includes(
-          "container"
-        )
-      )
-    )
-  ) {
-    return "two_pointers" as const;
-  }
-
-  if (
-    combined.includes(
-      "level order"
-    ) ||
-    combined.includes(
-      "breadth-first"
-    ) ||
-    combined.includes(
-      "breadth first"
-    ) ||
-    combined.includes(
-      "bfs"
-    )
-  ) {
-    return "bfs" as const;
-  }
-
-  if (
-    (
-      combined.includes(
-        "preorder"
-      ) ||
-      combined.includes(
-        "inorder"
-      ) ||
-      combined.includes(
-        "postorder"
-      ) ||
-      combined.includes(
-        "depth-first"
-      ) ||
-      combined.includes(
-        "depth first"
-      ) ||
-      combined.includes(
-        "dfs"
-      )
-    ) &&
-    (
-      combined.includes(
-        "tree"
-      ) ||
-      combined.includes(
-        "node"
-      )
-    )
-  ) {
-    return "tree_dfs" as const;
-  }
-
-  if (
-    combined.includes(
-      "binary search"
-    )
-  ) {
-    return "binary_search" as const;
-  }
-
-  if (
-    combined.includes(
-      "hash map"
-    ) ||
-    combined.includes(
-      "hashmap"
-    ) ||
-    combined.includes(
-      "hash set"
-    ) ||
-    combined.includes(
-      "hashset"
-    )
-  ) {
-    return "hash_map" as const;
-  }
-
-  if (
-    combined.includes(
-      "stack"
-    )
-  ) {
-    return "stack" as const;
-  }
-
-  if (
-    combined.includes(
-      "prefix sum"
-    )
-  ) {
-    return "prefix_sum" as const;
-  }
-
-  if (
-    combined.includes(
-      "linked list"
-    )
-  ) {
-    return "linked_list" as const;
-  }
-
-  return "unknown" as const;
+): ConceptId | "unknown" {
+  /*
+    Concept detection lives with the reference
+    packs so the Coach and the Director always
+    agree on which pack applies.
+  */
+  return detectConcept(
+    question,
+    correctChoice,
+    codeSnippet
+  );
 }
 
 function isSlidingWindowProblem(
@@ -1356,6 +2298,70 @@ OPTIMAL-SOLUTION ANIMATION RULE — CRITICAL:
 }
 
 function getAlgorithmSpecificGuidance(
+  question:
+    string,
+  correctChoice:
+    string,
+  codeSnippet:
+    string
+) {
+  const concept =
+    detectOptimalTechnique(
+      question,
+      correctChoice,
+      codeSnippet
+    );
+
+  const pack =
+    getReferencePack(
+      concept
+    );
+
+  /*
+    The original hand-written overrides cover these
+    concepts; every other pack gets the generic
+    technique-first rule plus its pack text.
+  */
+  const legacyConcepts =
+    new Set([
+      "sliding_window",
+      "two_pointers",
+      "binary_search",
+      "bfs",
+      "tree_dfs",
+      "hash_map",
+      "stack",
+      "prefix_sum",
+    ]);
+
+  const techniqueGuidance =
+    isHeapConcept(
+      concept
+    )
+      ? getTechniqueFirstRule(
+          concept === "min_heap"
+            ? "a min-heap / priority queue"
+            : "a max-heap / priority queue"
+        )
+      : legacyConcepts.has(
+            concept
+          ) ||
+          !pack
+        ? getTechniqueGuidance(
+            question,
+            correctChoice,
+            codeSnippet
+          )
+        : getTechniqueFirstRule(
+            pack.name
+          );
+
+  return pack
+    ? `${techniqueGuidance}\n${renderPackForCoach(pack)}`
+    : techniqueGuidance;
+}
+
+function getTechniqueGuidance(
   question:
     string,
   correctChoice:
@@ -1790,8 +2796,13 @@ function enforceSlidingWindowVisuals(
         )
       );
 
+    /*
+      After the first scene the window SLIDES
+      (left follows right), so the core idea is
+      visible even with only two walkthrough scenes.
+    */
     const left =
-      walkthroughStep <= 1
+      walkthroughStep === 0
         ? 0
         : Math.min(
             Math.max(
@@ -2131,6 +3142,11 @@ VOICE / COACH PERSONALITY:
 - Do not greet the players again inside every scene.
 - Do not restate the entire question.
 - Technical explanations must remain accurate.
+- NARRATION IS SPOKEN ALOUD: never write code operators or symbols in "narration".
+  Assignment and comparison must NEVER sound the same: say "is set to" or "single equals"
+  for = (assignment), and "is equal to" or "double equals" for == (comparison).
+  Say "is not equal to" (not !=), "less than or equal to" (not <=),
+  "O of n" (not O(n)), "i plus one" (not i+1). Code belongs in "code", not narration.
 
 GAME-PACE RULE — CRITICAL:
 This is a multiplayer game, not a lesson video.
@@ -2221,6 +3237,9 @@ Allowed visual.kind values ONLY:
 - "hashmap"
 - "stack"
 - "tree"
+- any kind named in the reference pack's VISUAL CONTRACT above (heap, BST, trie,
+  graph, union-find, segment tree, Fenwick tree, linked list, queue/deque kinds) —
+  ONLY for that concept, with exactly the data shape the contract describes
 - "code"
 - "complexity"
 - "takeaway"
@@ -2258,15 +3277,15 @@ POINTERS:
 
 For sliding-window problems, activeIndices should represent EVERY index currently inside the window from left through right.
 
-HASHMAP:
+HASHMAP (static table; for hash map / hash set questions use the pack's "hash_map"/"hash_set" contract instead):
 {
   "kind": "hashmap",
   "entries": [
-    {"key": "2", "value": "0", "active": true},
-    {"key": "7", "value": "1", "active": false}
+    {"key": "<key from THIS problem>", "value": "<its value>", "active": true}
   ],
-  "operation": "Check whether target - current is already stored"
+  "operation": "What this lookup checks"
 }
+Always use keys/values that come from the current question, never sample data.
 
 STACK:
 {
@@ -2356,6 +3375,7 @@ Use exactly this top-level structure:
 
 {
   "summary": "One concise sentence summarizing the main insight.",
+  "correctedCode": "BUG HUNT ONLY: the COMPLETE fixed snippet (omit this field for other question types)",
   "steps": [
     "Short reasoning step 1",
     "Short reasoning step 2",
@@ -2558,15 +3578,67 @@ Keep its narration short and decisive so the game can resume immediately.
           sourceCode
         );
 
+      const concept =
+        detectOptimalTechnique(
+          args.question,
+          correctChoice,
+          sourceCode
+        );
+
       const visuallyPrioritized =
         preservePrimaryVisualThroughEnding(
           techniqueSafe,
-          questionType
+          questionType,
+          concept
         );
 
-      return enforceBugHuntEnding(
-        visuallyPrioritized,
-        questionType
+      const questionText =
+        `${args.question}\n${correctChoice}\n${sourceCode}`;
+
+      const packEnforced =
+        upgradeLegacyHashVisuals(
+          enforceStructureVisuals(
+            visuallyPrioritized,
+            concept,
+            questionType,
+            questionText
+          ),
+          questionType,
+          questionText,
+          concept
+        );
+
+      const withFix =
+        questionType ===
+          "bug_hunt" &&
+        sourceCode
+          ? await ensureCorrectedCode(
+              packEnforced,
+              {
+                apiKey,
+                question:
+                  args.question,
+                correctChoice,
+                originalCode:
+                  sourceCode,
+                coachCorrectedCode:
+                  (
+                    parsed as {
+                      correctedCode?: unknown;
+                    }
+                  )
+                    ?.correctedCode,
+              }
+            )
+          : packEnforced;
+
+      return pinBugLine(
+        enforceBugHuntEnding(
+          withFix,
+          questionType
+        ),
+        questionType,
+        sourceCode
       );
     },
   });

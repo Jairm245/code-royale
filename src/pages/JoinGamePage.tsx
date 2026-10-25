@@ -17,6 +17,8 @@ import {
   api,
 } from "../../convex/_generated/api";
 
+import { Icon } from "../components/Icon";
+
 function JoinGamePage() {
   const navigate =
     useNavigate();
@@ -175,193 +177,54 @@ function JoinGamePage() {
   }
 
   return (
-    <main className="host-game-shell entry-page-shell">
-      <section className="entry-screen">
-        <div className="entry-brand">
-          <div className="entry-brand-icon">
-            ⚔️
-          </div>
+    <main className="shell shell-phone">
+      <section className="entry">
+        <form className="entry-card panel" onSubmit={handleJoin}>
+          <h1>Join a game</h1>
 
-          <p className="host-eyebrow">
-            ENTER THE ARENA
-          </p>
-
-          <h1>
-            Join
-            Code Royale
-          </h1>
-
-          <p className="entry-subtitle">
-            Enter your room code
-            and choose the name
-            your rivals will see.
-          </p>
-        </div>
-
-        <form
-          className="entry-form-card"
-          onSubmit={
-            handleJoin
-          }
-        >
-          <div className="entry-field">
-            <label
-              className="entry-label"
-              htmlFor="room-code"
-            >
-              ROOM CODE
-            </label>
-
+          <div className="field">
+            <label htmlFor="room-code">Room code</label>
             <input
               id="room-code"
-              className="entry-input entry-code-input"
-              value={
-                roomCode
-              }
-              onChange={(
-                event
-              ) =>
-                setRoomCode(
-                  event.target
-                    .value
-                    .toUpperCase()
-                )
-              }
-              placeholder="ABCD12"
+              className="code-input"
+              value={roomCode}
+              onChange={(event) => setRoomCode(event.target.value.toUpperCase())}
+              placeholder="ABC123"
               autoCapitalize="characters"
               autoComplete="off"
-              spellCheck={
-                false
-              }
-              maxLength={
-                12
-              }
-              disabled={
-                joining
-              }
+              inputMode="text"
+              spellCheck={false}
+              maxLength={12}
+              disabled={joining}
             />
           </div>
 
-          <div className="entry-field">
-            <label
-              className="entry-label"
-              htmlFor="player-name"
-            >
-              PLAYER NAME
-            </label>
-
+          <div className="field">
+            <label htmlFor="player-name">Your name</label>
             <input
               id="player-name"
-              className="entry-input"
-              value={
-                name
-              }
-              onChange={(
-                event
-              ) =>
-                setName(
-                  event.target
-                    .value
-                )
-              }
-              placeholder="Your name"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="What should the host call you?"
               autoComplete="nickname"
-              maxLength={
-                24
-              }
-              disabled={
-                joining
-              }
+              enterKeyHint="go"
+              maxLength={24}
+              disabled={joining}
             />
           </div>
 
-          {error && (
-            <div className="entry-error">
-              {error}
-            </div>
-          )}
+          {error && <div className="notice">{error}</div>}
 
-          <button
-            type="submit"
-            className="entry-submit-button"
-            disabled={
-              joining
-            }
-          >
-            <span>
-              {joining
-                ? "Joining battle..."
-                : "Join Battle"}
-            </span>
-
-            <span>
-              →
-            </span>
+          <button type="submit" className="btn btn-gold btn-lg btn-block" disabled={joining}>
+            <Icon name="play" />
+            {joining ? "Joining…" : "Join game"}
           </button>
 
-          <button
-            type="button"
-            className="entry-back-button"
-            onClick={() =>
-              navigate("/")
-            }
-            disabled={
-              joining
-            }
-          >
-            ← Back home
+          <button type="button" className="btn btn-quiet btn-block" onClick={() => navigate("/")} disabled={joining}>
+            <Icon name="arrow-left" />
+            Back
           </button>
         </form>
-
-        <div className="entry-feature-row">
-          <div className="entry-feature">
-            <span>
-              🧠
-            </span>
-
-            <div>
-              <strong>
-                Think fast
-              </strong>
-
-              <small>
-                Speed boosts your score
-              </small>
-            </div>
-          </div>
-
-          <div className="entry-feature">
-            <span>
-              🛡️
-            </span>
-
-            <div>
-              <strong>
-                Counter rivals
-              </strong>
-
-              <small>
-                Queue defenses for next round
-              </small>
-            </div>
-          </div>
-
-          <div className="entry-feature">
-            <span>
-              🏆
-            </span>
-
-            <div>
-              <strong>
-                Climb the board
-              </strong>
-
-              <small>
-                Win the 10-round battle
-              </small>
-            </div>
-          </div>
-        </div>
       </section>
     </main>
   );

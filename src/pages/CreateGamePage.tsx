@@ -15,6 +15,8 @@ import {
   api,
 } from "../../convex/_generated/api";
 
+import { Icon } from "../components/Icon";
+
 /*
   Avoid characters that are easy
   to confuse on a phone screen.
@@ -124,144 +126,45 @@ function CreateGamePage() {
   }
 
   return (
-    <main className="host-game-shell entry-page-shell">
-      <section className="entry-screen">
-        <div className="entry-brand">
-          <div className="entry-brand-icon">
-            👑
-          </div>
+    <main className="shell shell-phone">
+      <section className="entry">
+        <div className="entry-card panel">
+          <h1>Host a game</h1>
 
-          <p className="host-eyebrow">
-            HOST A BATTLE
-          </p>
-
-          <h1>
-            Create a
-            Code Royale
-            room
-          </h1>
-
-          <p className="entry-subtitle">
-            Launch a 10-round
-            coding showdown with
-            live answers, power-ups,
-            and an AI Coach.
-          </p>
-        </div>
-
-        <div className="entry-form-card">
-          <div className="entry-form-heading">
-            <div className="entry-action-icon">
-              ⚔️
-            </div>
-
-            <div>
+          <ul className="entry-facts">
+            <li>
+              <Icon name="flag" />
               <span>
-                NEW ARENA
+                <strong>Ten rounds</strong> of AI-written coding questions: data structures, spot the bug,
+                best approach, and edge cases.
               </span>
-
-              <strong>
-                Ready to host?
-              </strong>
-            </div>
-          </div>
-
-          <div className="entry-feature-row entry-feature-row-compact">
-            <div className="entry-feature">
+            </li>
+            <li>
+              <Icon name="users" />
               <span>
-                🔟
+                <strong>Up to eight players</strong> join from their phones with a room code or QR code.
               </span>
-
-              <div>
-                <strong>
-                  10 rounds
-                </strong>
-
-                <small>
-                  Rotating question modes
-                </small>
-              </div>
-            </div>
-
-            <div className="entry-feature">
+            </li>
+            <li>
+              <Icon name="coach" />
               <span>
-                ⚡
+                <strong>An AI coach</strong> walks through any question nobody gets right.
               </span>
+            </li>
+          </ul>
 
-              <div>
-                <strong>
-                  Power-Ups
-                </strong>
+          {error && <div className="notice">{error}</div>}
 
-                <small>
-                  Tactical next-round effects
-                </small>
-              </div>
-            </div>
-
-            <div className="entry-feature">
-              <span>
-                🤖
-              </span>
-
-              <div>
-                <strong>
-                  AI Coach
-                </strong>
-
-                <small>
-                  Explains missed questions
-                </small>
-              </div>
-            </div>
-          </div>
-
-          {error && (
-            <div className="entry-error">
-              {error}
-            </div>
-          )}
-
-          <button
-            type="button"
-            className="entry-submit-button"
-            onClick={
-              handleCreate
-            }
-            disabled={
-              creating
-            }
-          >
-            <span>
-              {creating
-                ? "Creating arena..."
-                : "Create Game"}
-            </span>
-
-            <span>
-              →
-            </span>
+          <button type="button" className="btn btn-gold btn-lg btn-block" onClick={handleCreate} disabled={creating}>
+            <Icon name="play" />
+            {creating ? "Creating room…" : "Create room"}
           </button>
 
-          <button
-            type="button"
-            className="entry-back-button"
-            onClick={() =>
-              navigate("/")
-            }
-            disabled={
-              creating
-            }
-          >
-            ← Back home
+          <button type="button" className="btn btn-quiet btn-block" onClick={() => navigate("/")} disabled={creating}>
+            <Icon name="arrow-left" />
+            Back
           </button>
         </div>
-
-        <p className="entry-footer-note">
-          A room code and QR
-          code will be generated
-          for your players.
-        </p>
       </section>
     </main>
   );

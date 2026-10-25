@@ -1196,3 +1196,125 @@
 .ref-code-corrected .ref-operation {
   color: rgba(134,207,183,0.78);
 }
+
+/* =========================================================
+   REFERENCE PACKS
+   Sliding window: one continuous band. Every other
+   structure view lives in StructureVisuals.css.
+========================================================= */
+
+/* SLIDING WINDOW BAND */
+
+.ref-cell-window {
+  background: rgba(62,116,218,0.10);
+  border-top-color: rgba(91,143,232,0.7);
+  border-bottom-color: rgba(91,143,232,0.7);
+  transition:
+    background 420ms ease,
+    border-color 420ms ease;
+}
+
+.ref-cell-window-start {
+  border-left: 2px solid #5b8fe8;
+}
+
+.ref-cell-window-end {
+  border-right: 2px solid #5b8fe8;
+}
+
+
+
+/* ARRAY READABILITY
+   Cells size to their content (inline width); text is
+   clipped with an ellipsis instead of overlapping. */
+
+.ref-cell {
+  padding: 0 6px;
+  box-sizing: border-box;
+}
+
+.ref-cell-text {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ref-array-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.ref-array-empty-box {
+  min-width: 96px;
+  height: 50px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed rgba(255,153,72,0.75);
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  font-size: 1rem;
+  color: #ffb06b;
+}
+
+.ref-array-empty span {
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  font-size: 0.6rem;
+  color: rgba(255,255,255,0.5);
+}
+
+
+/* stack with no source input: center the stack alone */
+.ref-stack-scene.ref-stack-scene-solo {
+  grid-template-columns: auto;
+  justify-content: center;
+}
+
+
+/* BUG HUNT: bug tag + corrected-code diff */
+
+.ref-code-bug-tag {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font: normal 0.55rem ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #ffb06b;
+  border: 1px solid rgba(255,153,72,0.6);
+  padding: 1px 6px;
+}
+
+.ref-code-bug {
+  background: linear-gradient(90deg, rgba(255,153,72,0.10), transparent 75%);
+}
+
+.ref-code-removed {
+  color: rgba(255,130,130,0.75);
+  background: rgba(255,80,80,0.06);
+}
+
+.ref-code-removed code {
+  text-decoration: line-through;
+  text-decoration-color: rgba(255,130,130,0.55);
+}
+
+.ref-code-added {
+  color: #7fdc9a;
+  background: rgba(96,207,128,0.08);
+}
+
+.ref-code-removed > span,
+.ref-code-added > span {
+  font-weight: 600;
+}

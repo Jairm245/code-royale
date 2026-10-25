@@ -29,6 +29,8 @@ import AICoachAnimation, {
 
 import {
   getQuestionTypeForRound,
+  buildTopicPlan,
+  getTopicForRound,
 } from "../utils/questionRotation";
 
 import {
@@ -38,12 +40,34 @@ import {
 
 import {
   playStreamingVoice,
+  prefetchStreamingVoice,
   stopGeneratedVoice,
 } from "../utils/generatedVoice";
 
 import {
   playSfx,
+  startMusic,
 } from "../utils/sfx";
+
+import {
+  Icon,
+  Wordmark,
+  categoryOf,
+} from "../components/Icon";
+
+import {
+  Clock,
+  Curtain,
+  Dots,
+} from "../components/ShowParts";
+
+import {
+  SoundToggle,
+} from "../components/SoundToggle";
+
+import {
+  useAnswersOpen,
+} from "../hooks/useAnswersOpen";
 
 /* ========================================
    TYPES
@@ -128,25 +152,7 @@ const MAX_ROUNDS = 10;
 function getQuestionTypeLabel(
   type?: string
 ) {
-  switch (type) {
-    case "bug_hunt":
-      return "🐛 BUG HUNT";
-
-    case "optimal_approach":
-      return "⚡ OPTIMAL APPROACH";
-
-    case "complexity":
-      return "⏱️ COMPLEXITY";
-
-    case "data_structure":
-      return "🧱 DATA STRUCTURES";
-
-    case "edge_case":
-      return "🔍 EDGE CASE";
-
-    default:
-      return "CODE ROYALE";
-  }
+  return categoryOf(type).label;
 }
 
 function isValidQuestion(
@@ -207,6 +213,31 @@ function HostGamePage() {
   */
   const restartingGameRef =
     useRef(false);
+
+  /*
+    QUESTION VARIETY
+    - topic plan: a shuffled focus topic per round
+      (new shuffle every game) so one structure can't
+      dominate.
+    - asked history: every question + correct answer
+      seen in this session, sent to the generator so
+      nothing repeats (kept across Play Again too).
+  */
+  const topicPlanRef =
+    useRef<string[]>(
+      buildTopicPlan(
+        Math.floor(
+          Math.random() *
+            1_000_000_000
+        )
+      )
+    );
+
+  const askedQuestionsRef =
+    useRef<string[]>([]);
+
+  const askedAnswersRef =
+    useRef<string[]>([]);
 
   const prefetchRoundRef =
     useRef<
@@ -313,13 +344,15 @@ function HostGamePage() {
       return;
     }
 
+    /*
+      A finished game shows FINAL RESULTS and waits
+      for the host to press Play Again. The replay
+      screen is only armed by handlePlayAgain.
+    */
     if (
       room.status ===
       "finished"
     ) {
-      restartingGameRef.current =
-        true;
-
       return;
     }
 
@@ -353,6 +386,66 @@ function HostGamePage() {
     room?.choices,
     room?.questionEndsAt,
   ]);
+
+  /*
+    Record every question (and its correct answer)
+    as soon as it goes live, including round 1 from
+    the starter bank.
+  */
+  useEffect(() => {
+    if (!room?.question) {
+      return;
+    }
+
+    if (
+      askedQuestionsRef.current.includes(
+        room.question
+      )
+    ) {
+      return;
+    }
+
+    askedQuestionsRef.current = [
+      ...askedQuestionsRef.current,
+      room.question,
+    ].slice(-30);
+
+    const answer =
+      room.correctAnswer !==
+      undefined
+        ? room.choices?.[
+            room.correctAnswer
+          ]
+        : undefined;
+
+    if (answer) {
+      askedAnswersRef.current = [
+        ...askedAnswersRef.current,
+        answer,
+      ].slice(-30);
+    }
+  }, [
+    room?.question,
+    room?.choices,
+    room?.correctAnswer,
+  ]);
+
+  function getAskedQuestions(
+    current?: string
+  ) {
+    const all = [
+      ...askedQuestionsRef.current,
+    ];
+
+    if (
+      current &&
+      !all.includes(current)
+    ) {
+      all.push(current);
+    }
+
+    return all.slice(-15);
+  }
 
   const answers =
     useQuery(
@@ -476,6 +569,105 @@ const powerupEvents =
       room?.questionEndsAt
     );
 
+  /*
+    READ FIRST, THEN ANSWER
+    Answers unlock when the question has been read
+    aloud (host calls openAnswers) or at the 10 s cap;
+    the 20 s timer starts then.
+  */
+  const {
+    open: answersOpen,
+    readingProgress,
+  } = useAnswersOpen(
+    room?.answersOpenAt,
+    room?.questionStartedAt
+  );
+
+  const openAnswers =
+    useMutation(
+      api.rooms.openAnswers
+    );
+
+  const openedSoundRoundRef =
+    useRef<number | null>(null);
+
+  useEffect(() => {
+    if (
+      !room ||
+      room.status !==
+        "playing" ||
+      !answersOpen ||
+      openedSoundRoundRef.current ===
+        room.currentRound
+    ) {
+      return;
+    }
+
+    openedSoundRoundRef.current =
+      room.currentRound;
+
+    void playSfx("open");
+  }, [
+    room?.status,
+    room?.currentRound,
+    answersOpen,
+  ]);
+
+  /* music follows the show: tension during questions, groove on results */
+  useEffect(() => {
+    if (!room) {
+      return;
+    }
+
+    if (
+      room.status ===
+      "playing"
+    ) {
+      startMusic("question");
+    } else if (
+      room.status ===
+        "results" ||
+      room.status ===
+        "finished"
+    ) {
+      startMusic("results");
+    } else if (
+      room.status ===
+      "explanation"
+    ) {
+      /* the coach has its own voice and sounds */
+      startMusic("off");
+    }
+  }, [
+    room?.status,
+  ]);
+
+  /* fanfare once when the game ends */
+  const finaleSoundRef =
+    useRef(false);
+
+  useEffect(() => {
+    if (
+      room?.status ===
+        "finished" &&
+      !finaleSoundRef.current
+    ) {
+      finaleSoundRef.current =
+        true;
+      void playSfx("complete");
+    }
+
+    if (
+      room?.status ===
+      "playing"
+    ) {
+      finaleSoundRef.current =
+        false;
+    }
+  }, [
+    room?.status,
+  ]);
+
   /* ========================================
      LOAD NEXT ROUND
   ======================================== */
@@ -489,6 +681,34 @@ const powerupEvents =
         currentQuestion?:
           string
       ) => {
+        /*
+          After the last round (and its explanation),
+          "next round" means the final results.
+        */
+        if (
+          currentRound >=
+          MAX_ROUNDS
+        ) {
+          try {
+            await finishGame({
+              roomId,
+            });
+
+            setAnimationPlan(
+              null
+            );
+
+            return true;
+          } catch (error) {
+            console.error(
+              "Finishing the game failed:",
+              error
+            );
+
+            return false;
+          }
+        }
+
         const nextRound =
           currentRound +
           1;
@@ -527,11 +747,18 @@ const powerupEvents =
                     expectedType,
 
                   previousQuestions:
-                    currentQuestion
-                      ? [
-                          currentQuestion,
-                        ]
-                      : [],
+                    getAskedQuestions(
+                      currentQuestion
+                    ),
+
+                  previousAnswers:
+                    askedAnswersRef.current,
+
+                  requestedTopic:
+                    getTopicForRound(
+                      topicPlanRef.current,
+                      nextRound
+                    ),
                 }
               );
 
@@ -624,6 +851,7 @@ const powerupEvents =
         generateQuestion,
         applyQueuedForRound,
         setGeneratedQuestion,
+        finishGame,
       ]
     );
 
@@ -658,6 +886,30 @@ const powerupEvents =
     const narration =
       `${category}. ${room.question}`;
 
+    const roomId =
+      room._id;
+
+    const round =
+      room.currentRound;
+
+    /* question has been read → unlock answers and start the 20 s timer */
+    function finishReading() {
+      if (cancelled) {
+        return;
+      }
+
+      void openAnswers({
+        roomId,
+        round,
+      }).catch(
+        (error: unknown) =>
+          console.warn(
+            "Opening answers failed (the 10 s cap still opens them):",
+            error
+          )
+      );
+    }
+
     let browserFallbackStarted =
       false;
 
@@ -683,6 +935,12 @@ const powerupEvents =
 
           pitch:
             1.0,
+
+          onEnd:
+            finishReading,
+
+          onError:
+            finishReading,
         }
       );
     }
@@ -697,6 +955,9 @@ const powerupEvents =
           narration,
           "question",
           {
+            onEnd:
+              finishReading,
+
             onError:
               (
                 error
@@ -724,12 +985,15 @@ const powerupEvents =
       Let the question card render first, then
       begin streamed playback almost immediately.
     */
+    /* the question sting plays, then the host reads */
+    void playSfx("reveal");
+
     const timer =
       setTimeout(
         () => {
           void startQuestionVoice();
         },
-        80
+        850
       );
 
     return () => {
@@ -1028,12 +1292,14 @@ const powerupEvents =
     const currentRound =
       room.currentRound;
 
-    if (
+    /*
+      Final round: there is no next question to
+      prefetch, but the Coach explanation still is,
+      so it starts as fast as every other round.
+    */
+    const isFinalRound =
       currentRound >=
-      MAX_ROUNDS
-    ) {
-      return;
-    }
+      MAX_ROUNDS;
 
     if (
       prefetchRoundRef
@@ -1069,16 +1335,28 @@ const powerupEvents =
 
     async function prefetchAI() {
       const questionPromise =
-        generateQuestion({
+        isFinalRound
+          ? Promise.resolve()
+          : generateQuestion({
           difficulty:
             "medium-hard",
 
           requestedType:
             nextType,
 
-          previousQuestions: [
-            currentQuestion,
-          ],
+          previousQuestions:
+            getAskedQuestions(
+              currentQuestion
+            ),
+
+          previousAnswers:
+            askedAnswersRef.current,
+
+          requestedTopic:
+            getTopicForRound(
+              topicPlanRef.current,
+              currentRound + 1
+            ),
         })
           .then(
             async (
@@ -1112,6 +1390,22 @@ const powerupEvents =
                   "Prefetched question was invalid."
                 );
               }
+
+              /*
+                Warm up the next question's voice now so
+                it starts instantly when the round begins.
+              */
+              prefetchStreamingVoice(
+                `${getQuestionTypeLabel(
+                  nextType
+                )
+                  .replace(
+                    /[^a-zA-Z ]/g,
+                    ""
+                  )
+                  .trim()}. ${question.question}`,
+                "question"
+              );
 
               prefetchedQuestionRef.current =
                 {
@@ -1205,6 +1499,25 @@ const powerupEvents =
 
                   plan,
                 };
+
+              /*
+                Warm up only the Coach's FIRST line (the
+                Coach may not be needed if someone answers
+                correctly); the rest is fetched when the
+                Coach appears.
+              */
+              const firstScene =
+                explanation.scenes[0];
+
+              if (
+                firstScene
+              ) {
+                prefetchStreamingVoice(
+                  firstScene.narration?.trim() ||
+                    firstScene.text,
+                  firstScene.type
+                );
+              }
 
               console.log(
                 "✅ Explanation prefetched"
@@ -1494,16 +1807,12 @@ const powerupEvents =
     const timer =
       setTimeout(
         async () => {
-          if (
-            currentRound >=
-            MAX_ROUNDS
-          ) {
-            await finishGame({
-              roomId,
-            });
-
-            return;
-          }
+          /*
+            The final round is handled like every other
+            round (results, then the AI Coach if nobody
+            got it right). loadNextRound finishes the
+            game instead of starting round 11.
+          */
 
           const someoneCorrect =
             answers.some(
@@ -1718,6 +2027,30 @@ const powerupEvents =
       return;
     }
 
+    /*
+      Only now (the host asked for a replay) hide
+      the old game's results/timer while round 1
+      loads.
+    */
+    restartingGameRef.current =
+      true;
+
+    /*
+      New game: new topic order, and answers may be
+      reused across games (questions still may not).
+    */
+    askedAnswersRef.current =
+      [];
+
+    /* fresh topic order for the new game */
+    topicPlanRef.current =
+      buildTopicPlan(
+        Math.floor(
+          Math.random() *
+            1_000_000_000
+        )
+      );
+
     try {
       await resetGame({
         roomId:
@@ -1738,7 +2071,16 @@ const powerupEvents =
             firstType,
 
           previousQuestions:
-            [],
+            getAskedQuestions(),
+
+          previousAnswers:
+            askedAnswersRef.current,
+
+          requestedTopic:
+            getTopicForRound(
+              topicPlanRef.current,
+              1
+            ),
         });
 
       const firstQuestion:
@@ -1813,6 +2155,9 @@ const powerupEvents =
         round: 1,
       });
     } catch (error) {
+      restartingGameRef.current =
+        false;
+
       console.error(
         "Play again failed:",
         error
@@ -1825,40 +2170,47 @@ const powerupEvents =
   ======================================== */
 
   if (
-    room ===
-      undefined ||
-    players ===
-      undefined ||
-    answers ===
-      undefined
+    room === undefined ||
+    players === undefined ||
+    answers === undefined
   ) {
     return (
-      <main className="host-game-shell">
-        <div className="host-loading">
-          <div className="host-loading-crown">
-            👑
-          </div>
-
-          <h2>
-            Loading Code
-            Royale...
-          </h2>
-        </div>
+      <main className="shell shell-host">
+        <Curtain icon="crown" title="Opening the studio">
+          <Dots />
+        </Curtain>
       </main>
     );
   }
 
-  if (
-    room === null
-  ) {
+  if (room === null) {
     return (
-      <main className="host-game-shell">
-        <h2>
-          Game not found.
-        </h2>
+      <main className="shell shell-host">
+        <Curtain icon="search" title="Game not found">
+          <a className="btn btn-gold" href="/create">Create a new room</a>
+        </Curtain>
       </main>
     );
   }
+
+  const topbar = (center: React.ReactNode) => (
+    <header className="topbar">
+      <Wordmark />
+      {center}
+      <div className="topbar-right">
+        <span className="plate">
+          Room <strong>{room.code}</strong>
+        </span>
+        <SoundToggle />
+      </div>
+    </header>
+  );
+
+  const roundSign = (
+    <span className="sign">
+      Round <b>{room.currentRound}</b> of {MAX_ROUNDS}
+    </span>
+  );
 
   /* ========================================
      REPLAY TRANSITION
@@ -1868,39 +2220,12 @@ const powerupEvents =
     restartingGameRef.current
   ) {
     return (
-      <main className="host-game-shell">
-        <header className="host-topbar">
-          <div className="host-brand">
-            <span>
-              👑
-            </span>
-
-            CODE ROYALE
-          </div>
-
-          <div className="host-room-chip">
-            ROOM {room.code}
-          </div>
-        </header>
-
-        <section className="host-coach-screen">
-          <div className="host-coach-icon">
-            ⚔️
-          </div>
-
-          <p className="host-eyebrow">
-            NEW GAME
-          </p>
-
-          <h1>
-            Starting Round 1...
-          </h1>
-
-          <p className="host-coach-subtitle">
-            Resetting scores, power-ups,
-            and loading a fresh question.
-          </p>
-        </section>
+      <main className="shell shell-host">
+        {topbar(<span className="sign">New game</span>)}
+        <Curtain icon="replay" title="Resetting the stage">
+          <p>Scores and power-ups are cleared. Round 1 is on its way.</p>
+          <Dots />
+        </Curtain>
       </main>
     );
   }
@@ -1914,13 +2239,8 @@ const powerupEvents =
     "finished"
   ) {
     const finalPlayers =
-      [
-        ...players,
-      ].sort(
-        (
-          a,
-          b
-        ) =>
+      [...players].sort(
+        (a, b) =>
           b.score -
           a.score
       );
@@ -1928,164 +2248,67 @@ const powerupEvents =
     const winner =
       finalPlayers[0];
 
+    /* podium order on stage: 2nd, 1st, 3rd */
+    const podium = [
+      { player: finalPlayers[1], place: 2 },
+      { player: finalPlayers[0], place: 1 },
+      { player: finalPlayers[2], place: 3 },
+    ];
+
     return (
-      <main className="host-game-shell">
-        <header className="host-topbar">
-          <div className="host-brand">
-            <span>
-              👑
-            </span>
+      <main className="shell shell-host">
+        {topbar(<span className="sign">Final</span>)}
 
-            CODE ROYALE
+        <section className="finale">
+          <h1>{winner ? `${winner.name} wins` : "Game complete"}</h1>
+
+          <div className="podium">
+            {podium.map(({ player, place }) => (
+              <div className={`podium-step podium-${place}`} key={place}>
+                {player ? (
+                  <>
+                    {place === 1 && <Icon name="crown" className="podium-crown" />}
+                    <span className="podium-name">{player.name}</span>
+                    <span className="podium-score">{player.score} pts</span>
+                  </>
+                ) : (
+                  <span className="podium-score">&nbsp;</span>
+                )}
+                <div className="podium-block">{place}</div>
+              </div>
+            ))}
           </div>
 
-          <div className="host-room-chip">
-            ROOM {room.code}
-          </div>
-        </header>
-
-        <section className="host-results-layout">
-          <div className="host-results-main">
-            <p className="host-eyebrow">
-              10 ROUNDS COMPLETE
-            </p>
-
-            <div
-              style={{
-                fontSize:
-                  "4.5rem",
-                marginBottom:
-                  "10px",
-              }}
-            >
-              👑
-            </div>
-
-            <h1>
-              {winner
-                ? `${winner.name} wins!`
-                : "Game Complete"}
-            </h1>
-
-            <div className="host-results-answer">
-              <span>
-                CHAMPION SCORE
-              </span>
-
-              <strong>
-                {winner
-                  ? `${winner.score} pts`
-                  : "—"}
-              </strong>
-            </div>
-
-            <p className="host-results-status">
-              Code Royale complete.
-              Final rankings are locked.
-            </p>
-
-            <div
-              style={{
-                display:
-                  "flex",
-                gap:
-                  "12px",
-                justifyContent:
-                  "center",
-                flexWrap:
-                  "wrap",
-                marginTop:
-                  "24px",
-              }}
-            >
-              <button
-                onClick={
-                  handlePlayAgain
-                }
-                style={{
-                  padding:
-                    "12px 20px",
-                  borderRadius:
-                    "12px",
-                  fontWeight:
-                    800,
-                  cursor:
-                    "pointer",
-                }}
-              >
-                🔁 Play Again
-              </button>
-
-              <button
-                onClick={() => {
-                  window.location.href =
-                    "/create";
-                }}
-                style={{
-                  padding:
-                    "12px 20px",
-                  borderRadius:
-                    "12px",
-                  fontWeight:
-                    800,
-                  cursor:
-                    "pointer",
-                }}
-              >
-                ✨ New Room
-              </button>
-            </div>
-          </div>
-
-          <aside className="host-leaderboard-panel">
-            <div className="host-panel-heading">
-              <span>
-                🏆
-              </span>
-
-              <h2>
-                Final Leaderboard
-              </h2>
-            </div>
-
-            <div className="host-leaderboard-list">
-              {finalPlayers.map(
-                (
-                  player,
-                  index
-                ) => (
-                  <div
-                    className="host-leaderboard-row"
-                    key={
-                      player._id
-                    }
-                  >
-                    <div className="host-rank">
-                      {index === 0
-                        ? "👑"
-                        : index + 1}
-                    </div>
-
-                    <div className="host-player-info">
-                      <strong>
-                        {player.name}
-                      </strong>
-
-                      <span>
-                        {index === 0
-                          ? "Champion"
-                          : `Place ${index + 1}`}
-                      </span>
-                    </div>
-
-                    <div className="host-round-points">
-                      {player.score} pts
-                    </div>
+          {finalPlayers.length > 3 && (
+            <div className="roster finale-rest">
+              {finalPlayers.slice(3).map((player, index) => (
+                <div className="contestant" key={player._id}>
+                  <div className="contestant-rank">{index + 4}</div>
+                  <div className="contestant-name">
+                    <strong>{player.name}</strong>
                   </div>
-                )
-              )}
+                  <div className="contestant-side">{player.score}</div>
+                </div>
+              ))}
             </div>
-          </aside>
+          )}
+
+          <div className="finale-actions">
+            <button type="button" className="btn btn-gold btn-lg" onClick={handlePlayAgain}>
+              <Icon name="replay" />
+              Play again
+            </button>
+            <button
+              type="button"
+              className="btn btn-lg"
+              onClick={() => {
+                window.location.href = "/create";
+              }}
+            >
+              <Icon name="plus" />
+              New room
+            </button>
+          </div>
         </section>
       </main>
     );
@@ -2100,115 +2323,66 @@ const powerupEvents =
     "explanation"
   ) {
     const correctAnswerText =
-      room.correctAnswer !==
-        undefined &&
+      room.correctAnswer !== undefined &&
       room.choices
-        ? room.choices[
-            room.correctAnswer
-          ]
+        ? room.choices[room.correctAnswer]
         : "Unknown";
 
     return (
-      <main className="host-game-shell">
-        <header className="host-topbar">
-          <div className="host-brand">
-            <span>
-              👑
-            </span>
+      <main className="shell shell-host">
+        {topbar(roundSign)}
 
-            CODE ROYALE
-          </div>
+        <div className="coach-bar">
+          <span className="tag">
+            <Icon name="coach" />
+            Nobody got it. The coach explains.
+          </span>
 
-          <div className="host-room-chip">
-            ROOM {room.code}
-          </div>
-        </header>
-
-        <div
-          style={{
-            width: "100%",
-            maxWidth: "1050px",
-            margin: "0 auto 14px",
-            display: "flex",
-            justifyContent: "flex-end",
-          }}
-        >
-          <button
-            type="button"
-            onClick={
-              handleSkipExplanation
-            }
-            style={{
-              margin: 0,
-              padding:
-                "10px 16px",
-              borderRadius:
-                "12px",
-              border:
-                "1px solid rgba(255,255,255,0.16)",
-              background:
-                "rgba(255,255,255,0.08)",
-              color:
-                "white",
-              fontWeight:
-                800,
-              cursor:
-                "pointer",
-            }}
-          >
-            Skip Explanation →
+          <button type="button" className="btn btn-quiet" onClick={handleSkipExplanation}>
+            {room.currentRound >= MAX_ROUNDS ? "Skip to final results" : "Skip to next question"}
           </button>
         </div>
 
         <AICoachAnimation
           key={`${room._id}-${room.currentRound}`}
-          scenes={
-            room.explanationScenes ??
-            []
-          }
-          correctAnswer={
-            correctAnswerText
-          }
-          questionType={
-            room.questionType
-          }
-          fallbackCode={
-            room.codeSnippet
-          }
-          animationPlan={
-            animationPlan
-          }
-          onComplete={
-            async () => {
-              if (
-                coachAdvancingRef
-                  .current
-              ) {
-                return;
-              }
-
-              coachAdvancingRef.current =
-                true;
-
-              const success =
-                await loadNextRound(
-                  room._id,
-                  room.currentRound,
-                  room.question
-                );
-
-              if (
-                !success
-              ) {
-                coachAdvancingRef.current =
-                  false;
-              }
+          scenes={room.explanationScenes ?? []}
+          correctAnswer={correctAnswerText}
+          questionType={room.questionType}
+          fallbackCode={room.codeSnippet}
+          animationPlan={animationPlan}
+          onComplete={async () => {
+            if (coachAdvancingRef.current) {
+              return;
             }
-          }
+
+            coachAdvancingRef.current = true;
+
+            const success = await loadNextRound(
+              room._id,
+              room.currentRound,
+              room.question
+            );
+
+            if (!success) {
+              coachAdvancingRef.current = false;
+            }
+          }}
         />
       </main>
     );
   }
+
+  const sortedPlayers =
+    [...players].sort(
+      (a, b) =>
+        b.score -
+        a.score
+    );
+
+  const category =
+    categoryOf(
+      room.questionType
+    );
 
   /* ========================================
      RESULTS VIEW
@@ -2218,144 +2392,102 @@ const powerupEvents =
     room.status ===
     "results"
   ) {
-    const sortedPlayers =
-      [
-        ...players,
-      ].sort(
-        (
-          a,
-          b
-        ) =>
-          b.score -
-          a.score
+    const picks =
+      (room.choices ?? []).map(
+        (_, index) =>
+          answers.filter(
+            (answer) =>
+              answer.answerIndex ===
+              index
+          ).length
+      );
+
+    const someoneCorrect =
+      answers.some(
+        (answer) =>
+          answer.correct
       );
 
     return (
-      <main className="host-game-shell">
-        <header className="host-topbar">
-          <div className="host-brand">
-            <span>
-              👑
-            </span>
+      <main className="shell shell-host">
+        {topbar(roundSign)}
 
-            CODE ROYALE
-          </div>
+        <section className="stage">
+          <div className="stage-main">
+            <div className="marquee">
+              <div className="marquee-inner reveal">
+                <span className="tag">
+                  <Icon name={category.icon} />
+                  {category.label}
+                </span>
 
-          <div className="host-room-chip">
-            ROOM {room.code}
-          </div>
-        </header>
+                <h1>{someoneCorrect ? "The answer" : "Nobody got it"}</h1>
 
-        <section className="host-results-layout">
-          <div className="host-results-main">
-            <p className="host-eyebrow">
-              ROUND{" "}
-              {
-                room.currentRound
-              }{" "}
-              COMPLETE
-            </p>
-
-            <h1>
-              Answer Revealed
-            </h1>
-
-            <div className="host-results-answer">
-              <span>
-                CORRECT ANSWER
-              </span>
-
-              <strong>
-                {room.correctAnswer !==
-                  undefined &&
-                room.choices
-                  ? room.choices[
-                      room.correctAnswer
-                    ]
-                  : "Unknown"}
-              </strong>
+                <p className="board-question">{room.question}</p>
+              </div>
             </div>
 
-            <p className="host-results-status">
-              Preparing the
-              next challenge...
-            </p>
-          </div>
+            <div className="tiles">
+              {room.choices?.map((choice, index) => {
+                const correct = index === room.correctAnswer;
 
-          <aside className="host-leaderboard-panel">
-            <div className="host-panel-heading">
-              <span>
-                🏆
-              </span>
-
-              <h2>
-                Leaderboard
-              </h2>
+                return (
+                  <div
+                    key={index}
+                    className={`tile tile-${index} ${correct ? "tile-correct" : "tile-dim"}`}
+                  >
+                    <span className="tile-key">
+                      {correct ? <Icon name="check" /> : String.fromCharCode(65 + index)}
+                    </span>
+                    <span className="tile-text">{choice}</span>
+                    <span className="tile-picks">
+                      {picks[index] > 0 ? `${picks[index]} ${picks[index] === 1 ? "pick" : "picks"}` : ""}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
 
-            <div className="host-leaderboard-list">
-              {sortedPlayers.map(
-                (
-                  player,
-                  index
-                ) => {
-                  const playerAnswer =
-                    answers.find(
-                      (
-                        answer
-                      ) =>
-                        answer.playerId ===
-                        player._id
-                    );
+            <div className="stage-note">
+              <Dots />
+              {room.currentRound >= MAX_ROUNDS
+                ? "Final results are next"
+                : "Next question coming up"}
+            </div>
+          </div>
 
-                  return (
-                    <div
-                      className="host-leaderboard-row"
-                      key={
-                        player._id
-                      }
-                    >
-                      <div className="host-rank">
-                        {
-                          index +
-                          1
-                        }
-                      </div>
+          <aside className="panel stage-side">
+            <div className="panel-title">
+              Scores
+              <small>this round</small>
+            </div>
 
-                      <div className="host-player-info">
-                        <strong>
-                          {
-                            player.name
-                          }
-                        </strong>
+            <div className="roster">
+              {sortedPlayers.map((player, index) => {
+                const playerAnswer = answers.find(
+                  (answer) => answer.playerId === player._id
+                );
 
-                        <span>
-                          {
-                            player.score
-                          }{" "}
-                          pts
-                        </span>
-                      </div>
-
-                      <div className="host-round-points">
-                        {playerAnswer?.correct
-                          ? `+${playerAnswer.points}`
-                          : "+0"}
-                      </div>
-
-                      {index ===
-                        sortedPlayers.length -
-                          1 &&
-                        sortedPlayers.length >
-                          1 && (
-                          <div className="host-comeback-icon">
-                            🔥
-                          </div>
-                        )}
+                return (
+                  <div
+                    className={`contestant ${index === 0 ? "contestant-lead" : ""}`}
+                    key={player._id}
+                  >
+                    <div className="contestant-rank">{index + 1}</div>
+                    <div className="contestant-name">
+                      <strong>{player.name}</strong>
+                      <span>{player.score} pts</span>
                     </div>
-                  );
-                }
-              )}
+                    <div className="contestant-side">
+                      {playerAnswer?.correct ? (
+                        <span className="gain">+{playerAnswer.points}</span>
+                      ) : (
+                        <span className="zero">+0</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </aside>
         </section>
@@ -2367,324 +2499,140 @@ const powerupEvents =
      ACTIVE GAME VIEW
   ======================================== */
 
-  const sortedPlayers =
-    [
-      ...players,
-    ].sort(
-      (
-        a,
-        b
-      ) =>
-        b.score -
-        a.score
-    );
-
-  const totalRoundTime =
-    20;
-
-  const timerPercent =
-    Math.max(
-      0,
-      Math.min(
-        100,
-        (
-          secondsRemaining /
-          totalRoundTime
-        ) *
-          100
-      )
-    );
-
-  const timerDanger =
-    secondsRemaining <=
-    5;
-
   const responsePercent =
     players.length > 0
       ? Math.min(
           100,
-          (
-            answers.length /
-            players.length
-          ) *
-            100
+          (answers.length / players.length) * 100
         )
       : 0;
 
+  const announceCopy = {
+    lag: { icon: "bolt" as const, title: "Lag spike", detail: "Attack queued for next round" },
+    firewall: { icon: "shield" as const, title: "Firewall", detail: "Protection queued for next round" },
+    fifty: { icon: "split" as const, title: "50/50", detail: "Two wrong answers removed" },
+  };
+
   return (
-    <main className="host-game-shell">
-      {/* POWERUP BANNER */}
-
+    <main className="shell shell-host">
       {powerupBanner && (
-        <div
-          className={`host-powerup-alert host-powerup-${powerupBanner.type}`}
-        >
-          <div className="host-powerup-alert-icon">
-            {powerupBanner.type ===
-              "lag" &&
-              "⚡"}
-
-            {powerupBanner.type ===
-              "firewall" &&
-              "🛡️"}
-
-            {powerupBanner.type ===
-              "fifty" &&
-              "✂️"}
+        <div className="announce" role="status">
+          <div className="announce-icon">
+            <Icon name={announceCopy[powerupBanner.type].icon} />
           </div>
-
-          <div className="host-powerup-alert-copy">
+          <div>
+            <strong>{announceCopy[powerupBanner.type].title}</strong>
             <span>
-              {
-                powerupBanner
-                  .playerName
-              }
+              {powerupBanner.playerName}. {announceCopy[powerupBanner.type].detail}
             </span>
-
-            <strong>
-              {powerupBanner.type ===
-                "lag" &&
-                "LAG SPIKE!"}
-
-              {powerupBanner.type ===
-                "firewall" &&
-                "FIREWALL!"}
-
-              {powerupBanner.type ===
-                "fifty" &&
-                "50 / 50!"}
-            </strong>
-
-            <small>
-              {powerupBanner.type ===
-                "lag" &&
-                "Attack queued for next round"}
-
-              {powerupBanner.type ===
-                "firewall" &&
-                "Protection queued for next round"}
-
-              {powerupBanner.type ===
-                "fifty" &&
-                "Two wrong answers eliminated now"}
-            </small>
           </div>
         </div>
       )}
 
-      <header className="host-topbar">
-        <div className="host-brand">
-          <span>
-            👑
-          </span>
+      {topbar(roundSign)}
 
-          CODE ROYALE
-        </div>
-
-        <div className="host-header-meta">
-          <div className="host-round-pill">
-            ROUND{" "}
-            {
-              room.currentRound
-            }
-          </div>
-
-          <div className="host-room-chip">
-            ROOM {room.code}
-          </div>
-        </div>
-      </header>
-
-      <div className="host-game-layout">
-        <section className="host-main-stage">
-          <div className="host-question-meta">
-            <span className="host-type-pill">
-              {getQuestionTypeLabel(
-                room.questionType
-              )}
-            </span>
-
-            <div
-              className={`host-timer-ring ${
-                timerDanger
-                  ? "host-timer-danger"
-                  : ""
-              }`}
-              style={{
-                background: `conic-gradient(
-                  currentColor ${timerPercent}%,
-                  rgba(255,255,255,0.08) ${timerPercent}%
-                )`,
-              }}
-            >
-              <div className="host-timer-inner">
-                <strong>
-                  {
-                    secondsRemaining
-                  }
-                </strong>
-
-                <span>
-                  SEC
+      <section className="stage">
+        <div className="stage-main">
+          {/* key: the bulbs chase once for each new question */}
+          <div className="marquee marquee-chase" key={`board-${room.currentRound}`}>
+            <div className="marquee-inner">
+              <div className="board-head">
+                <span className="tag">
+                  <Icon name={category.icon} />
+                  {category.label}
                 </span>
+
+                {!answersOpen && (
+                  <span className="reading-note">
+                    <Icon name="ear" />
+                    Listen to the question
+                  </span>
+                )}
               </div>
+
+              <h1 className="board-question">
+                {room.question ?? "Loading question…"}
+              </h1>
+
+              {room.codeSnippet && (
+                <pre className="board-code">
+                  <code>{room.codeSnippet}</code>
+                </pre>
+              )}
             </div>
           </div>
 
-          <div className="host-question-card">
-            <p className="host-eyebrow">
-              QUESTION · AI-GENERATED VOICE
-            </p>
+          <div className="stage-play">
+            <Clock
+              seconds={secondsRemaining}
+              reading={!answersOpen}
+              readingProgress={readingProgress}
+              size={150}
+            />
 
-            <h1>
-              {room.question ??
-                "Loading question..."}
-            </h1>
-
-            {room.codeSnippet && (
-              <pre className="host-code-block">
-                <code>
-                  {
-                    room.codeSnippet
-                  }
-                </code>
-              </pre>
-            )}
-          </div>
-
-          <div className="host-answer-grid">
-            {room.choices?.map(
-              (
-                choice,
-                index
-              ) => (
-                <div
-                  className={`host-answer-card host-answer-${index}`}
-                  key={
-                    index
-                  }
-                >
-                  <span className="host-answer-letter">
-                    {String.fromCharCode(
-                      65 +
-                        index
-                    )}
-                  </span>
-
-                  <span className="host-answer-text">
-                    {
-                      choice
-                    }
-                  </span>
+            <div className="tiles">
+              {room.choices?.map((choice, index) => (
+                <div className={`tile tile-${index}`} key={index}>
+                  <span className="tile-key">{String.fromCharCode(65 + index)}</span>
+                  <span className="tile-text">{choice}</span>
                 </div>
-              )
-            )}
-          </div>
-
-          <div className="host-response-section">
-            <div className="host-response-header">
-              <span>
-                Live responses
-              </span>
-
-              <strong>
-                {
-                  answers.length
-                }{" "}
-                /{" "}
-                {
-                  players.length
-                }
-              </strong>
-            </div>
-
-            <div className="host-response-track">
-              <div
-                className="host-response-fill"
-                style={{
-                  width:
-                    `${responsePercent}%`,
-                }}
-              />
+              ))}
             </div>
           </div>
-        </section>
+        </div>
 
-        <aside className="host-live-panel">
-          <div className="host-panel-heading">
-            <span>
-              🏆
-            </span>
-
-            <h2>
-              Leaderboard
-            </h2>
+        <aside className="panel stage-side">
+          <div className="panel-title">
+            Contestants
+            <small>{answersOpen ? "answering" : "listening"}</small>
           </div>
 
-          <div className="host-leaderboard-list">
-            {sortedPlayers.map(
-              (
-                player,
-                index
-              ) => (
+          <div className="roster">
+            {sortedPlayers.map((player, index) => {
+              const answered = answers.some(
+                (answer) => answer.playerId === player._id
+              );
+
+              return (
                 <div
-                  className="host-leaderboard-row"
-                  key={
-                    player._id
-                  }
+                  className={`contestant ${index === 0 && player.score > 0 ? "contestant-lead" : ""}`}
+                  key={player._id}
                 >
-                  <div className="host-rank">
-                    {
-                      index +
-                      1
-                    }
+                  <div className="contestant-rank">{index + 1}</div>
+                  <div className="contestant-name">
+                    <strong>{player.name}</strong>
+                    <span>{player.score} pts</span>
                   </div>
-
-                  <div className="host-player-info">
-                    <strong>
-                      {
-                        player.name
-                      }
-                    </strong>
-
-                    <span>
-                      {
-                        player.score
-                      }{" "}
-                      pts
-                    </span>
-                  </div>
-
-                  {answers.some(
-                    (
-                      answer
-                    ) =>
-                      answer.playerId ===
-                      player._id
-                  ) ? (
-                    <div className="host-answered-indicator">
-                      ✓
+                  {answered ? (
+                    <div className="status-dot status-dot-done" aria-label="Answered">
+                      <Icon name="check" />
                     </div>
                   ) : (
-                    <div className="host-waiting-indicator">
-                      •••
-                    </div>
+                    <div className="status-dot status-dot-wait" aria-label="Not answered yet" />
                   )}
                 </div>
-              )
-            )}
+              );
+            })}
           </div>
 
-          <div className="host-live-footer">
-            <span>
-              📱
-            </span>
+          <div className="meter">
+            <div className="meter-head">
+              Answers in
+              <strong>
+                {answers.length}/{players.length}
+              </strong>
+            </div>
+            <div className="meter-track">
+              <div className="meter-fill" style={{ width: `${responsePercent}%` }} />
+            </div>
+          </div>
 
-            Players answer on
-            their phones
+          <div className="stage-note">
+            <Icon name="phone" />
+            Players answer on their phones
           </div>
         </aside>
-      </div>
+      </section>
     </main>
   );
 }
