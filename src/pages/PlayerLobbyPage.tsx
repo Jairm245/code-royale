@@ -23,7 +23,13 @@ import {
 import { Icon, Wordmark } from "../components/Icon";
 import { Curtain, Dots } from "../components/ShowParts";
 
+import { stopMusic } from "../utils/sfx";
+
 function PlayerLobbyPage() {
+  useEffect(() => {
+    stopMusic();
+  }, []);
+
   const { code } =
     useParams();
 

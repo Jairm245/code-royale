@@ -1,5 +1,6 @@
 import {
   type FormEvent,
+  useEffect,
   useRef,
   useState,
 } from "react";
@@ -18,8 +19,14 @@ import {
 } from "../../convex/_generated/api";
 
 import { Icon } from "../components/Icon";
+import { stopMusic } from "../utils/sfx";
 
 function JoinGamePage() {
+  /* phones joining don't play the title theme */
+  useEffect(() => {
+    stopMusic();
+  }, []);
+
   const navigate =
     useNavigate();
 

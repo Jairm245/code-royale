@@ -17,6 +17,24 @@ function sameId(
     String(right);
 }
 
+
+const ONE_PER_ROUND_MESSAGE =
+  "You already used a power-up this round";
+
+function assertPowerupAvailableThisRound(
+  player: any,
+  room: any
+) {
+  if (
+    player.powerupRound ===
+    room.currentRound
+  ) {
+    throw new Error(
+      ONE_PER_ROUND_MESSAGE
+    );
+  }
+}
+
 async function getRoomForPlayer(
   ctx: any,
   player: any
@@ -144,6 +162,11 @@ export const useFiftyFifty =
         );
       }
 
+      assertPowerupAvailableThisRound(
+        player,
+        room
+      );
+
       const available =
         player.fiftyFifty ??
         0;
@@ -162,6 +185,8 @@ export const useFiftyFifty =
               0,
               available - 1
             ),
+          powerupRound:
+            room.currentRound,
         }
       );
 
@@ -219,6 +244,11 @@ export const activateFirewall =
         );
       }
 
+      assertPowerupAvailableThisRound(
+        player,
+        room
+      );
+
       const available =
         player.firewall ??
         0;
@@ -254,6 +284,8 @@ export const activateFirewall =
               0,
               available - 1
             ),
+          powerupRound:
+            room.currentRound,
         }
       );
 
@@ -364,6 +396,11 @@ export const useLagSpike =
         );
       }
 
+      assertPowerupAvailableThisRound(
+        attacker,
+        room
+      );
+
       const available =
         attacker.lagSpike ??
         0;
@@ -385,6 +422,8 @@ export const useLagSpike =
               0,
               available - 1
             ),
+          powerupRound:
+            room.currentRound,
         }
       );
 

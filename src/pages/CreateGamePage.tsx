@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useRef,
   useState,
 } from "react";
@@ -16,6 +17,8 @@ import {
 } from "../../convex/_generated/api";
 
 import { Icon } from "../components/Icon";
+import { SoundToggle } from "../components/SoundToggle";
+import { startMusic } from "../utils/sfx";
 
 /*
   Avoid characters that are easy
@@ -67,6 +70,11 @@ function CreateGamePage() {
     setError,
   ] =
     useState("");
+
+  /* keep the title theme going (it carries on from the home page) */
+  useEffect(() => {
+    startMusic("title");
+  }, []);
 
   const createRoom =
     useMutation(
@@ -127,6 +135,10 @@ function CreateGamePage() {
 
   return (
     <main className="shell shell-phone">
+      <div className="entry-sound">
+        <SoundToggle />
+      </div>
+
       <section className="entry">
         <div className="entry-card panel">
           <h1>Host a game</h1>

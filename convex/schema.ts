@@ -172,6 +172,11 @@ export default defineSchema({
     v.boolean()
   ),
 
+    /* round in which this player last spent a power-up (one per round) */
+    powerupRound: v.optional(
+      v.number()
+    ),
+
 firewallBlockedThisRound:
   v.optional(
     v.boolean()

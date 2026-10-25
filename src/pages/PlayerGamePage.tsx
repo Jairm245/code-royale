@@ -678,6 +678,13 @@ function PlayerGamePage() {
     }
 
     if (
+      currentPlayer.powerupRound ===
+      room.currentRound
+    ) {
+      return;
+    }
+
+    if (
       selectedAnswer !==
         null ||
       secondsRemaining <=
@@ -765,6 +772,13 @@ function PlayerGamePage() {
     }
 
     if (
+      currentPlayer.powerupRound ===
+      room.currentRound
+    ) {
+      return;
+    }
+
+    if (
       room.currentRound >=
         10 ||
       queuedFirewall ||
@@ -830,6 +844,13 @@ function PlayerGamePage() {
     if (
       targetId ===
       currentPlayer._id
+    ) {
+      return;
+    }
+
+    if (
+      currentPlayer.powerupRound ===
+      room.currentRound
     ) {
       return;
     }
@@ -1085,6 +1106,10 @@ function PlayerGamePage() {
   const finalRound =
     room.currentRound >= 10;
 
+  const powerupUsed =
+    currentPlayer.powerupRound ===
+    room.currentRound;
+
   const rivals =
     players.filter(
       (player) =>
@@ -1183,7 +1208,13 @@ function PlayerGamePage() {
       <section>
         <div className="section-title">
           Power-ups
-          {finalRound && <small>Final round: no new attacks or shields</small>}
+          {powerupUsed ? (
+            <small>One per round. Used this round.</small>
+          ) : finalRound ? (
+            <small>Final round: no new attacks or shields</small>
+          ) : (
+            <small>One per round</small>
+          )}
         </div>
 
         <div className="powerups">
@@ -1192,6 +1223,7 @@ function PlayerGamePage() {
             className="powerup"
             onClick={handleFiftyFifty}
             disabled={
+              powerupUsed ||
               (currentPlayer.fiftyFifty ?? 0) <= 0 ||
               selectedAnswer !== null ||
               timeUp ||
@@ -1213,6 +1245,7 @@ function PlayerGamePage() {
             className="powerup powerup-shield"
             onClick={handleFirewall}
             disabled={
+              powerupUsed ||
               finalRound ||
               queuedFirewall ||
               (currentPlayer.firewall ?? 0) <= 0 ||
@@ -1255,6 +1288,7 @@ function PlayerGamePage() {
                   className="rival"
                   onClick={() => handleLagSpike(player._id, player.name)}
                   disabled={
+                    powerupUsed ||
                     finalRound ||
                     selectedAnswer !== null ||
                     timeUp ||

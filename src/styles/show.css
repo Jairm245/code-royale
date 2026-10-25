@@ -1635,3 +1635,12 @@ button.tile:disabled {
   font-variant-numeric: tabular-nums;
   opacity: 0.85;
 }
+
+/* sound toggle on the entry pages */
+.entry-sound {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: -40px;
+  position: relative;
+  z-index: 1;
+}

@@ -1,12 +1,24 @@
+import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Icon } from "../components/Icon";
+import { SoundToggle } from "../components/SoundToggle";
+import { startMusic } from "../utils/sfx";
 
 function HomePage() {
   const navigate = useNavigate();
 
+  /* title theme; browsers start it on the first tap anywhere */
+  useEffect(() => {
+    startMusic("title");
+  }, []);
+
   return (
     <main className="shell shell-phone">
+      <div className="entry-sound">
+        <SoundToggle />
+      </div>
+
       <section className="entry">
         <h1 className="entry-title">
           <Icon name="crown" />

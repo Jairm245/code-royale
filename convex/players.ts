@@ -95,6 +95,7 @@ export const joinRoom =
               Date.now(),
 
             fiftyFifty: 0,
+            powerupRound: 0,
 
             lagSpike: 1,
 

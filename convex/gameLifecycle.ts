@@ -100,6 +100,7 @@ export const resetGame =
             score: 0,
 
             fiftyFifty: 0,
+            powerupRound: 0,
 
             lagSpike: 1,
 

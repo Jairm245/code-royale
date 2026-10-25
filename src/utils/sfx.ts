@@ -26,7 +26,7 @@ type SoundName =
   | "join"
   | "open";
 
-export type MusicMood = "lobby" | "question" | "results" | "off";
+export type MusicMood = "title" | "lobby" | "question" | "results" | "off";
 
 let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
@@ -39,6 +39,7 @@ let voiceActive = false;
 let mood: MusicMood = "off";
 
 const MOOD_VOLUME: Record<MusicMood, number> = {
+  title: 0.46,
   lobby: 0.42,
   question: 0.3,
   results: 0.4,
@@ -412,6 +413,14 @@ const CHORDS = [
   { root: -21, tones: [-9, -5, -2, 1] }, /* C7 */
 ];
 
+/* lead hook for the title theme, semitones from A4, keyed by 16th step */
+const TITLE_HOOK: Array<Record<number, number>> = [
+  { 0: 12, 3: 15, 6: 12, 8: 8, 10: 10, 12: 12, 14: 15 }, /* Fmaj7 */
+  { 0: 17, 3: 15, 6: 12, 10: 8, 12: 12 }, /* Dm7 */
+  { 0: 13, 3: 12, 6: 10, 8: 13, 10: 17, 12: 15 }, /* Gm7 */
+  { 0: 15, 2: 13, 4: 12, 6: 10, 8: 7, 12: 10, 14: 12 }, /* C7 */
+];
+
 let schedulerTimer: ReturnType<typeof setInterval> | null = null;
 let nextStepTime = 0;
 let step = 0;
@@ -468,6 +477,27 @@ function scheduleStep(stepIndex: number, time: number) {
   if (!groove && beatStep === 0) {
     for (const tone of chord.tones.slice(0, 3)) {
       osc(bus, "sine", note(tone), time, 0.05, 0.4, STEP * 15, { filter: 1200 });
+    }
+  }
+
+  /* title theme: a brassy lead hook plus a cymbal swell into each loop */
+  if (mood === "title") {
+    const lead = TITLE_HOOK[bar][beatStep];
+
+    if (lead !== undefined) {
+      const length = STEP * (TITLE_HOOK[bar][beatStep + 1] === undefined ? 2.6 : 1.5);
+      osc(bus, "sawtooth", note(lead), time, 0.05, 0.012, length, { filter: 2600, detune: -7 });
+      osc(bus, "sawtooth", note(lead), time, 0.05, 0.012, length, { filter: 2600, detune: 7 });
+      osc(bus, "square", note(lead - 12), time, 0.02, 0.01, length, { filter: 1400 });
+    }
+
+    if (bar === 0 && beatStep === 0) {
+      noiseHit(bus, time, 0.09, 1.1, "highpass", 6000);
+    }
+
+    /* drum fill on the last beat of the loop */
+    if (bar === 3 && beatStep >= 12) {
+      noiseHit(bus, time, 0.08 + (beatStep - 12) * 0.015, 0.09, "bandpass", 900 + (beatStep - 12) * 300, { q: 1.1 });
     }
   }
 

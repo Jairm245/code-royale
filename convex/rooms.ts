@@ -386,19 +386,33 @@ export const awardComeback = mutation({
       return;
     }
 
-    const sorted = [...players].sort(
-      (a, b) => a.score - b.score
+    /*
+      Everyone tied for the lowest score is in
+      last place. Each of them who isn't already
+      holding a 50/50 gets one, so the boost
+      follows whoever is currently last instead
+      of staying stuck on the first player in
+      the list.
+    */
+    const lowestScore = Math.min(
+      ...players.map((player) => player.score)
     );
 
-    const lastPlace = sorted[0];
+    const lastPlace = players.filter(
+      (player) => player.score === lowestScore
+    );
 
-    if ((lastPlace.fiftyFifty ?? 0) < 1) {
-      await ctx.db.patch(
-        lastPlace._id,
-        {
+    /* if everyone is tied (e.g. all on 0) nobody is behind */
+    if (lastPlace.length === players.length) {
+      return;
+    }
+
+    for (const player of lastPlace) {
+      if ((player.fiftyFifty ?? 0) < 1) {
+        await ctx.db.patch(player._id, {
           fiftyFifty: 1,
-        }
-      );
+        });
+      }
     }
   },
 });
