@@ -17,7 +17,7 @@ import {
   stopGeneratedVoice,
 } from "../utils/generatedVoice";
 
-import "./AICoachAnimationExpressive.css";
+import "./AICoachAnimationReferenceStyle.css";
 
 import {
   playSfx,
@@ -61,11 +61,39 @@ type ExplanationScene = {
   visual?: SceneVisual;
 };
 
+export type AnimationDirectorBeat = {
+  cue: string;
+  at: number;
+  action: string;
+  index?: number;
+  fromIndex?: number;
+  toIndex?: number;
+  line?: number;
+  key?: string;
+  value?: string;
+  text?: string;
+  label?: string;
+  from?: string;
+  to?: string;
+};
+
+export type AnimationDirectorPlan = {
+  version: number;
+  style: string;
+  scenes: Array<{
+    sceneIndex: number;
+    beats:
+      AnimationDirectorBeat[];
+  }>;
+};
+
 type Props = {
   scenes: ExplanationScene[];
   correctAnswer: string;
   questionType?: string;
   fallbackCode?: string;
+  animationPlan?:
+    AnimationDirectorPlan | null;
   onComplete?: () => void;
 };
 
@@ -205,41 +233,246 @@ function findHighlightLine(
   return undefined;
 }
 
-function getSceneIcon(
-  kind?: string,
-  type?: string
+function getSceneNarration(
+  scene:
+    ExplanationScene
 ) {
-  const key =
-    kind ??
-    type ??
-    "reasoning";
+  const visual =
+    scene.visual;
 
-  switch (key) {
-    case "array":
-      return "📊";
+  const reasoningNarration =
+    visual?.kind ===
+      "reasoning" &&
+    visual.reasoningSteps
+      ? visual.reasoningSteps.join(
+          ". "
+        )
+      : undefined;
 
-    case "pointers":
-      return "🎯";
+  return (
+    scene.narration?.trim() ||
+    [
+      scene.title,
+      scene.text,
+      reasoningNarration,
+      visual?.operation,
+      scene.takeaway,
+    ]
+      .filter(
+        (
+          value
+        ): value is string =>
+          Boolean(
+            value &&
+              value.trim()
+          )
+      )
+      .join(
+        ". "
+      ) ||
+    scene.text
+  );
+}
 
-    case "hashmap":
-      return "🗂️";
+function getCueProgress(
+  narration:
+    string,
 
-    case "stack":
-      return "🧱";
+  beat:
+    AnimationDirectorBeat
+) {
+  const fallback =
+    Math.min(
+      0.94,
+      Math.max(
+        0.04,
+        beat.at
+      )
+    );
 
-    case "code":
-    case "bug_hunt":
-      return "🔎";
+  const cue =
+    beat.cue?.trim();
 
-    case "complexity":
-      return "⚡";
-
-    case "takeaway":
-      return "🏆";
-
-    default:
-      return "🧠";
+  if (!cue) {
+    return fallback;
   }
+
+  const lowerNarration =
+    narration.toLowerCase();
+
+  const cueIndex =
+    lowerNarration.indexOf(
+      cue.toLowerCase()
+    );
+
+  if (
+    cueIndex <
+    0
+  ) {
+    return fallback;
+  }
+
+  const beforeWords =
+    narration
+      .slice(
+        0,
+        cueIndex
+      )
+      .trim()
+      .split(
+        /\s+/
+      )
+      .filter(
+        Boolean
+      )
+      .length;
+
+  const cueWords =
+    cue
+      .split(
+        /\s+/
+      )
+      .filter(
+        Boolean
+      )
+      .length;
+
+  const totalWords =
+    Math.max(
+      1,
+      narration
+        .trim()
+        .split(
+          /\s+/
+        )
+        .filter(
+          Boolean
+        )
+        .length
+    );
+
+  const cueProgress =
+    (
+      beforeWords +
+      cueWords *
+        0.78
+    ) /
+      totalWords;
+
+  /*
+    Trigger close to the END of the spoken cue.
+    This feels more like the visual responds to
+    the narrator instead of anticipating them.
+  */
+  return Math.min(
+    0.94,
+    Math.max(
+      0.04,
+      cueProgress *
+        0.82 +
+      fallback *
+        0.18
+    )
+  );
+}
+
+function getLastDirectorBeat(
+  beats:
+    AnimationDirectorBeat[],
+
+  actions:
+    string[]
+) {
+  for (
+    let index =
+      beats.length - 1;
+    index >= 0;
+    index -= 1
+  ) {
+    if (
+      actions.includes(
+        beats[
+          index
+        ].action
+      )
+    ) {
+      return beats[
+        index
+      ];
+    }
+  }
+
+  return undefined;
+}
+
+function applyPointerHistory(
+  pointers:
+    Pointer[],
+
+  beats:
+    AnimationDirectorBeat[],
+
+  maxIndex:
+    number
+) {
+  const next =
+    pointers.map(
+      (
+        pointer
+      ) => ({
+        ...pointer,
+      })
+    );
+
+  for (
+    const beat
+    of beats
+  ) {
+    if (
+      beat.action !==
+        "move_pointer" ||
+      !beat.label ||
+      beat.toIndex ===
+        undefined
+    ) {
+      continue;
+    }
+
+    const clampedIndex =
+      Math.min(
+        Math.max(
+          0,
+          beat.toIndex
+        ),
+        Math.max(
+          0,
+          maxIndex
+        )
+      );
+
+    const existing =
+      next.find(
+        (
+          pointer
+        ) =>
+          pointer.label ===
+          beat.label
+      );
+
+    if (existing) {
+      existing.index =
+        clampedIndex;
+    } else {
+      next.push({
+        label:
+          beat.label,
+        index:
+          clampedIndex,
+      });
+    }
+  }
+
+  return next;
 }
 
 /* ========================================
@@ -251,6 +484,7 @@ function AICoachAnimation({
   correctAnswer,
   questionType,
   fallbackCode,
+  animationPlan,
   onComplete,
 }: Props) {
   const [
@@ -273,6 +507,19 @@ function AICoachAnimation({
     setVoicePlaying,
   ] = useState(false);
 
+  const [
+    motionFrame,
+    setMotionFrame,
+  ] = useState(0);
+
+  const [
+    directorBeats,
+    setDirectorBeats,
+  ] =
+    useState<
+      AnimationDirectorBeat[]
+    >([]);
+
   /*
     Keep the latest values accessible
     without restarting narration every time
@@ -284,6 +531,14 @@ function AICoachAnimation({
 
   const onCompleteRef =
     useRef(onComplete);
+
+  const animationPlanRef =
+    useRef<
+      AnimationDirectorPlan | null
+    >(
+      animationPlan ??
+      null
+    );
 
   useEffect(() => {
     scenesRef.current =
@@ -299,6 +554,14 @@ function AICoachAnimation({
     onComplete,
   ]);
 
+  useEffect(() => {
+    animationPlanRef.current =
+      animationPlan ??
+      null;
+  }, [
+    animationPlan,
+  ]);
+
   /* ========================================
      RESET WHEN A NEW EXPLANATION MOUNTS
   ======================================== */
@@ -307,46 +570,12 @@ function AICoachAnimation({
     setCurrentScene(0);
     setVisible(true);
     setSceneBeat(0);
+    setMotionFrame(0);
+    setDirectorBeats(
+      []
+    );
   }, [
     scenes.length,
-  ]);
-
-  /*
-    Give every scene multiple visual beats so
-    the explanation feels alive while narration
-    is still playing instead of revealing one
-    static picture and waiting.
-  */
-  useEffect(() => {
-    setSceneBeat(0);
-
-    const timers = [
-      420,
-      980,
-      1580,
-      2280,
-    ].map(
-      (
-        delay,
-        index
-      ) =>
-        setTimeout(
-          () => {
-            setSceneBeat(
-              index + 1
-            );
-          },
-          delay
-        )
-    );
-
-    return () => {
-      timers.forEach(
-        clearTimeout
-      );
-    };
-  }, [
-    currentScene,
   ]);
 
   /* ========================================
@@ -373,43 +602,131 @@ function AICoachAnimation({
       return;
     }
 
-    const visual =
-      scene.visual;
-
-    const reasoningNarration =
-      visual?.kind ===
-        "reasoning" &&
-      visual.reasoningSteps
-        ? visual.reasoningSteps.join(
-            ". "
-          )
-        : undefined;
-
-    const narrationParts = [
-      scene.title,
-      scene.text,
-      reasoningNarration,
-      visual?.operation,
-      scene.takeaway,
-    ].filter(
-      (
-        value
-      ): value is string =>
-        Boolean(
-          value &&
-            value.trim()
-        )
-    );
-
-    const fallbackNarration =
-      narrationParts.join(
-        ". "
+    const narration =
+      getSceneNarration(
+        scene
       );
 
-    const narration =
-      scene.narration?.trim() ||
-      fallbackNarration ||
-      scene.text;
+    const directedScene =
+      animationPlanRef
+        .current
+        ?.scenes
+        .find(
+          (
+            candidate
+          ) =>
+            candidate
+              .sceneIndex ===
+            currentScene
+        );
+
+    const plannedBeats =
+      (
+        directedScene
+          ?.beats ??
+        []
+      )
+        .map(
+          (
+            beat
+          ) => ({
+            beat,
+            progress:
+              getCueProgress(
+                narration,
+                beat
+              ),
+          })
+        )
+        .sort(
+          (
+            a,
+            b
+          ) =>
+            a.progress -
+            b.progress
+        );
+
+    function syncDirector(
+      progress:
+        number
+    ) {
+      let activeIndex =
+        -1;
+
+      for (
+        let index = 0;
+        index <
+        plannedBeats.length;
+        index += 1
+      ) {
+        if (
+          progress >=
+          plannedBeats[
+            index
+          ].progress
+        ) {
+          activeIndex =
+            index;
+        }
+      }
+
+      if (
+        activeIndex <
+        0
+      ) {
+        setDirectorBeats(
+          []
+        );
+
+        setMotionFrame(
+          0
+        );
+
+        setSceneBeat(
+          0
+        );
+
+        return;
+      }
+
+      const reachedBeats =
+        plannedBeats
+          .slice(
+            0,
+            activeIndex + 1
+          )
+          .map(
+            (
+              item
+            ) =>
+              item.beat
+          );
+
+      /*
+        Keep every reached beat. Visual state is
+        cumulative: a moved pointer stays moved,
+        a code line stays selected, etc.
+      */
+      setDirectorBeats(
+        reachedBeats
+      );
+
+      setMotionFrame(
+        activeIndex + 1
+      );
+
+      setSceneBeat(
+        Math.min(
+          4,
+          activeIndex + 1
+        )
+      );
+    }
+
+    syncDirector(
+      0
+    );
 
     let advanceTimer:
       ReturnType<
@@ -419,6 +736,11 @@ function AICoachAnimation({
     let transitionTimer:
       ReturnType<
         typeof setTimeout
+      > | undefined;
+
+    let fallbackProgressTimer:
+      ReturnType<
+        typeof setInterval
       > | undefined;
 
     let browserFallbackStarted =
@@ -440,6 +762,18 @@ function AICoachAnimation({
 
       finished =
         true;
+
+      if (
+        fallbackProgressTimer
+      ) {
+        clearInterval(
+          fallbackProgressTimer
+        );
+      }
+
+      syncDirector(
+        1
+      );
 
       setVoicePlaying(
         false
@@ -519,6 +853,48 @@ function AICoachAnimation({
         true
       );
 
+      const fallbackStart =
+        performance.now();
+
+      const fallbackWords =
+        narration
+          .trim()
+          .split(
+            /\s+/
+          )
+          .filter(
+            Boolean
+          )
+          .length;
+
+      const fallbackDurationMs =
+        Math.max(
+          3000,
+          (
+            fallbackWords /
+            2.3
+          ) *
+            1000
+        );
+
+      fallbackProgressTimer =
+        setInterval(
+          () => {
+            const elapsed =
+              performance.now() -
+              fallbackStart;
+
+            syncDirector(
+              Math.min(
+                0.96,
+                elapsed /
+                  fallbackDurationMs
+              )
+            );
+          },
+          120
+        );
+
       speak(
         narration,
         {
@@ -551,7 +927,20 @@ function AICoachAnimation({
     async function startStreamingNarration() {
       try {
         console.log(
-          "⚡ Starting streamed AI Coach voice"
+          "🎬 Director plan:",
+          currentScene,
+          plannedBeats.map(
+            (
+              item
+            ) => ({
+              cue:
+                item.beat.cue,
+              action:
+                item.beat.action,
+              at:
+                item.progress,
+            })
+          )
         );
 
         await playStreamingVoice(
@@ -565,6 +954,19 @@ function AICoachAnimation({
                 ) {
                   setVoicePlaying(
                     true
+                  );
+                }
+              },
+
+            onProgress:
+              (
+                progress
+              ) => {
+                if (
+                  !cancelled
+                ) {
+                  syncDirector(
+                    progress
                   );
                 }
               },
@@ -639,6 +1041,14 @@ function AICoachAnimation({
         );
       }
 
+      if (
+        fallbackProgressTimer
+      ) {
+        clearInterval(
+          fallbackProgressTimer
+        );
+      }
+
       stopGeneratedVoice();
       stopVoice();
     };
@@ -665,21 +1075,44 @@ function AICoachAnimation({
   const visual =
     scene.visual;
 
-  const sceneIcon =
-    getSceneIcon(
-      visual?.kind,
-      scene.type
-    );
 
   const isBugHunt =
     questionType ===
     "bug_hunt";
 
+  const concreteVisualKinds =
+    new Set([
+      "array",
+      "pointers",
+      "hashmap",
+      "stack",
+      "tree",
+      "code",
+    ]);
+
+  /*
+    A takeaway scene is allowed to keep the optimal
+    structure visible. Only use the dedicated takeaway
+    animation when no concrete algorithm visual exists.
+  */
   const isTakeaway =
-    scene.type ===
-      "takeaway" ||
     visual?.kind ===
-      "takeaway";
+      "takeaway" ||
+    (
+      scene.type ===
+        "takeaway" &&
+      !(
+        visual &&
+        concreteVisualKinds.has(
+          visual.kind
+        )
+      )
+    );
+
+  const isCorrectedCode =
+    isBugHunt &&
+    scene.type ===
+      "corrected_code";
 
   const progress =
     ((currentScene + 1) /
@@ -688,8 +1121,11 @@ function AICoachAnimation({
 
   const codeToDisplay =
     isBugHunt
-      ? fallbackCode ??
-        scene.code
+      ? isCorrectedCode
+        ? scene.code ??
+          fallbackCode
+        : fallbackCode ??
+          scene.code
       : scene.code;
 
   const resolvedLine =
@@ -702,333 +1138,344 @@ function AICoachAnimation({
       : undefined;
 
   return (
-    <section className="ai-video">
-      {/* HEADER */}
-
-      <div className="ai-video-header">
-        <div
-          className={`ai-avatar ai-avatar-expressive ${
-            voicePlaying
-              ? "ai-avatar-speaking"
-              : ""
-          }`}
-        >
+    <section className="ref-coach">
+      <div className="ref-coach-stage">
+        <div className="ref-topline">
           <span>
-            {sceneIcon}
+            {questionType
+              ?.replace(
+                /_/g,
+                " "
+              )
+              .toUpperCase() ??
+              "CODE ROYALE"}
           </span>
 
-          <div className="coach-voice-wave">
-            {[
-              0,
-              1,
-              2,
-              3,
-              4,
-            ].map(
-              (
-                bar
-              ) => (
-                <i
-                  key={
-                    bar
-                  }
-                />
-              )
+          <span>
+            {currentScene + 1}
+            /
+            {scenes.length}
+          </span>
+        </div>
+
+        <div className="ref-scene-title">
+          {scene.title}
+        </div>
+
+        <div
+          key={currentScene}
+          className={`ref-visual-wrap ${
+            visible
+              ? "ref-visible"
+              : "ref-hidden"
+          }`}
+        >
+          {isBugHunt &&
+            codeToDisplay &&
+            !isTakeaway && (
+              <CodeAnimation
+                code={
+                  codeToDisplay
+                }
+                highlightLine={
+                  resolvedLine
+                }
+                highlightText={
+                  scene.highlightText
+                }
+                operation={
+                  visual?.operation
+                }
+                values={
+                  visual?.values
+                }
+                pointers={
+                  visual?.pointers
+                }
+                beat={
+                  sceneBeat
+                }
+                frame={
+                  motionFrame
+                }
+                directorBeats={
+                  directorBeats
+                }
+                bugMode={
+                  !isCorrectedCode
+                }
+                correctedMode={
+                  isCorrectedCode
+                }
+              />
             )}
+
+          {!isBugHunt &&
+            visual?.kind ===
+              "reasoning" && (
+              <ReasoningVisual
+                steps={
+                  visual.reasoningSteps ??
+                  [
+                    scene.text,
+                  ]
+                }
+                operation={
+                  visual.operation
+                }
+                beat={
+                  sceneBeat
+                }
+                frame={
+                  motionFrame
+                }
+                directorBeats={
+                  directorBeats
+                }
+              />
+            )}
+
+          {!isBugHunt &&
+            (
+              visual?.kind ===
+                "array" ||
+              visual?.kind ===
+                "pointers"
+            ) &&
+            visual.values && (
+              <ArrayVisual
+                values={
+                  visual.values
+                }
+                activeIndices={
+                  visual.activeIndices
+                }
+                pointers={
+                  visual.pointers
+                }
+                operation={
+                  visual.operation
+                }
+                beat={
+                  sceneBeat
+                }
+                frame={
+                  motionFrame
+                }
+                directorBeats={
+                  directorBeats
+                }
+              />
+            )}
+
+          {!isBugHunt &&
+            visual?.kind ===
+              "hashmap" &&
+            visual.entries && (
+              <HashMapVisual
+                entries={
+                  visual.entries
+                }
+                operation={
+                  visual.operation
+                }
+                beat={
+                  sceneBeat
+                }
+                frame={
+                  motionFrame
+                }
+                directorBeats={
+                  directorBeats
+                }
+              />
+            )}
+
+          {!isBugHunt &&
+            visual?.kind ===
+              "stack" &&
+            visual.stack && (
+              <StackVisual
+                stack={
+                  visual.stack
+                }
+                values={
+                  visual.values
+                }
+                activeIndices={
+                  visual.activeIndices
+                }
+                operation={
+                  visual.operation
+                }
+                beat={
+                  sceneBeat
+                }
+                frame={
+                  motionFrame
+                }
+                directorBeats={
+                  directorBeats
+                }
+              />
+            )}
+
+          {!isBugHunt &&
+            visual?.kind ===
+              "tree" &&
+            visual.values && (
+              <TreeVisual
+                values={
+                  visual.values
+                }
+                activeIndices={
+                  visual.activeIndices
+                }
+                queue={
+                  visual.stack
+                }
+                operation={
+                  visual.operation
+                }
+                directorBeats={
+                  directorBeats
+                }
+              />
+            )}
+
+          {!isBugHunt &&
+            codeToDisplay &&
+            (
+              visual?.kind ===
+                "code" ||
+              Boolean(
+                scene.code
+              )
+            ) && (
+              <CodeAnimation
+                code={
+                  codeToDisplay
+                }
+                highlightLine={
+                  resolvedLine
+                }
+                highlightText={
+                  scene.highlightText
+                }
+                operation={
+                  visual?.operation
+                }
+                values={
+                  visual?.values
+                }
+                pointers={
+                  visual?.pointers
+                }
+                beat={
+                  sceneBeat
+                }
+                frame={
+                  motionFrame
+                }
+                directorBeats={
+                  directorBeats
+                }
+              />
+            )}
+
+          {!isBugHunt &&
+            visual?.kind ===
+              "complexity" && (
+              <ComplexityVisual
+                reasoningSteps={
+                  visual.reasoningSteps
+                }
+                operation={
+                  visual.operation
+                }
+                beat={
+                  sceneBeat
+                }
+                frame={
+                  motionFrame
+                }
+                directorBeats={
+                  directorBeats
+                }
+              />
+            )}
+
+          {!isBugHunt &&
+            !isTakeaway &&
+            !visual && (
+              <ReasoningVisual
+                steps={[
+                  scene.text,
+                ]}
+                beat={
+                  sceneBeat
+                }
+                frame={
+                  motionFrame
+                }
+                directorBeats={
+                  directorBeats
+                }
+              />
+            )}
+
+          {isTakeaway && (
+            <TakeawayVisual
+              takeaway={
+                scene.takeaway ??
+                visual?.operation ??
+                correctAnswer
+              }
+              beat={
+                sceneBeat
+              }
+              frame={
+                motionFrame
+              }
+              directorBeats={
+                directorBeats
+              }
+            />
+          )}
+        </div>
+
+        <div className="ref-caption">
+          {scene.text}
+        </div>
+
+        <div className="ref-footer">
+          <div className="ref-progress-track">
+            <span
+              style={{
+                width:
+                  `${progress}%`,
+              }}
+            />
+          </div>
+
+          <div
+            className={`ref-voice-indicator ${
+              voicePlaying
+                ? "ref-speaking"
+                : ""
+            }`}
+            aria-label="AI generated voice"
+          >
+            <i />
+            <i />
+            <i />
+            <i />
           </div>
         </div>
-
-        <div className="ai-header-copy">
-          <p className="host-eyebrow">
-            AI COACH · AI-GENERATED VOICE
-          </p>
-
-          <strong>
-            Let's break it
-            down
-          </strong>
-        </div>
-
-        <div className="ai-scene-counter">
-          {currentScene + 1}
-          /
-          {scenes.length}
-        </div>
-      </div>
-
-      {/* PROGRESS */}
-
-      <div className="ai-progress-track">
-        <div
-          className="ai-progress-fill"
-          style={{
-            width:
-              `${progress}%`,
-          }}
-        />
-      </div>
-
-      {/* SCENE */}
-
-      <div
-        key={currentScene}
-        className={`ai-scene ${
-          visible
-            ? "ai-scene-visible"
-            : "ai-scene-hidden"
-        }`}
-      >
-        <div className="coach-scene-heading">
-          <p className="ai-scene-label">
-            {isBugHunt
-              ? "🐛 BUG HUNT"
-              : scene.type.toUpperCase()}
-          </p>
-
-          <h1>
-            {scene.title}
-          </h1>
-
-          <p className="ai-scene-text">
-            {scene.text}
-          </p>
-        </div>
-
-        {/* BUG HUNT */}
-
-        {isBugHunt &&
-          codeToDisplay &&
-          !isTakeaway && (
-            <CodeAnimation
-              code={
-                codeToDisplay
-              }
-              highlightLine={
-                resolvedLine
-              }
-              highlightText={
-                scene.highlightText
-              }
-              operation={
-                visual?.operation
-              }
-              beat={
-                sceneBeat
-              }
-              bugMode
-            />
-          )}
-
-        {/* REASONING */}
-
-        {!isBugHunt &&
-          visual?.kind ===
-            "reasoning" && (
-            <ReasoningVisual
-              steps={
-                visual.reasoningSteps ??
-                [
-                  scene.text,
-                ]
-              }
-              operation={
-                visual.operation
-              }
-              beat={
-                sceneBeat
-              }
-            />
-          )}
-
-        {/* ARRAY */}
-
-        {!isBugHunt &&
-          visual?.kind ===
-            "array" &&
-          visual.values && (
-            <ArrayVisual
-              values={
-                visual.values
-              }
-              activeIndices={
-                visual.activeIndices
-              }
-              pointers={
-                visual.pointers
-              }
-              operation={
-                visual.operation
-              }
-              beat={
-                sceneBeat
-              }
-            />
-          )}
-
-        {/* POINTERS */}
-
-        {!isBugHunt &&
-          visual?.kind ===
-            "pointers" &&
-          visual.values && (
-            <ArrayVisual
-              values={
-                visual.values
-              }
-              activeIndices={
-                visual.activeIndices
-              }
-              pointers={
-                visual.pointers
-              }
-              operation={
-                visual.operation
-              }
-              beat={
-                sceneBeat
-              }
-            />
-          )}
-
-        {/* HASH MAP */}
-
-        {!isBugHunt &&
-          visual?.kind ===
-            "hashmap" &&
-          visual.entries && (
-            <HashMapVisual
-              entries={
-                visual.entries
-              }
-              operation={
-                visual.operation
-              }
-              beat={
-                sceneBeat
-              }
-            />
-          )}
-
-        {/* STACK */}
-
-        {!isBugHunt &&
-          visual?.kind ===
-            "stack" &&
-          visual.stack && (
-            <StackVisual
-              stack={
-                visual.stack
-              }
-              operation={
-                visual.operation
-              }
-              beat={
-                sceneBeat
-              }
-            />
-          )}
-
-        {/* CODE */}
-
-        {!isBugHunt &&
-          codeToDisplay &&
-          (
-            visual?.kind ===
-              "code" ||
-            Boolean(
-              scene.code
-            )
-          ) && (
-            <CodeAnimation
-              code={
-                codeToDisplay
-              }
-              highlightLine={
-                resolvedLine
-              }
-              highlightText={
-                scene.highlightText
-              }
-              operation={
-                visual?.operation
-              }
-              beat={
-                sceneBeat
-              }
-            />
-          )}
-
-        {/* COMPLEXITY */}
-
-        {!isBugHunt &&
-          visual?.kind ===
-            "complexity" && (
-            <ComplexityVisual
-              reasoningSteps={
-                visual.reasoningSteps
-              }
-              operation={
-                visual.operation
-              }
-              beat={
-                sceneBeat
-              }
-            />
-          )}
-
-        {/* FALLBACK */}
-
-        {!isBugHunt &&
-          !isTakeaway &&
-          !visual && (
-            <ReasoningVisual
-              steps={[
-                scene.text,
-              ]}
-              beat={
-                sceneBeat
-              }
-            />
-          )}
-
-        {/* TAKEAWAY */}
-
-        {isTakeaway && (
-          <TakeawayVisual
-            takeaway={
-              scene.takeaway ??
-              visual?.operation ??
-              correctAnswer
-            }
-            beat={
-              sceneBeat
-            }
-          />
-        )}
-      </div>
-
-      {/* DOTS */}
-
-      <div className="ai-scene-dots">
-        {scenes.map(
-          (
-            _,
-            index
-          ) => (
-            <span
-              key={index}
-              className={
-                index <=
-                currentScene
-                  ? "ai-dot-active"
-                  : ""
-              }
-            />
-          )
-        )}
       </div>
     </section>
   );
+
 }
 
 /* ========================================
@@ -1038,139 +1485,129 @@ function AICoachAnimation({
 function ReasoningVisual({
   steps,
   operation,
-  beat = 0,
+  directorBeats = [],
 }: {
   steps: string[];
   operation?: string;
   beat?: number;
+  frame?: number;
+  directorBeats?:
+    AnimationDirectorBeat[];
 }) {
-  const usableSteps =
+  const items =
     steps
-      .filter(
-        (step) =>
+      .map(
+        (
+          step
+        ) =>
           step.trim()
-            .length > 0
+      )
+      .filter(
+        Boolean
       )
       .slice(
         0,
         4
       );
 
-  const activeIndex =
-    Math.min(
-      beat,
-      Math.max(
-        0,
-        usableSteps.length -
-          1
-      )
+  const relevantBeat =
+    getLastDirectorBeat(
+      directorBeats,
+      [
+        "show_equation",
+        "compare_values",
+        "emphasize_result",
+      ]
     );
 
+  /*
+    Mostly-static reasoning diagram:
+    all nodes stay visible. We only emphasize the
+    newest semantic point instead of cycling them.
+  */
+  const active =
+    items.length > 0
+      ? Math.min(
+          items.length - 1,
+          Math.max(
+            0,
+            directorBeats.length
+          )
+        )
+      : 0;
+
   return (
-    <div className="coach-algorithm-stage coach-stage-expressive">
-      <div className="coach-visual-title">
-        REASONING
-      </div>
+    <div className="ref-reasoning">
+      <div className="ref-reasoning-line" />
 
-      <div className="coach-reasoning-flow">
-        {usableSteps.map(
-          (
-            step,
-            index
-          ) => {
-            const revealed =
-              index <=
-              beat;
-
-            const active =
+      {items.map(
+        (
+          step,
+          index
+        ) => (
+          <div
+            key={
+              `${index}-${step}`
+            }
+            className={`ref-reasoning-node ${
               index ===
-              activeIndex;
+              active
+                ? "ref-node-active"
+                : ""
+            }`}
+          >
+            <span>
+              {index + 1}
+            </span>
 
-            return (
-              <div
-                className="coach-reasoning-chain"
-                key={
-                  `${index}-${step}`
-                }
-              >
-                <div
-                  className={`coach-reasoning-step ${
-                    index ===
-                    usableSteps.length -
-                      1
-                      ? "coach-reasoning-final"
-                      : ""
-                  } ${
-                    revealed
-                      ? "coach-beat-revealed"
-                      : "coach-beat-hidden"
-                  } ${
-                    active
-                      ? "coach-beat-current"
-                      : ""
-                  }`}
-                >
-                  <span className="coach-reasoning-number">
-                    {index + 1}
-                  </span>
+            <strong>
+              {step}
+            </strong>
 
-                  <strong>
-                    {step}
-                  </strong>
-                </div>
+            {index <
+              items.length -
+                1 && (
+              <i>
+                →
+              </i>
+            )}
+          </div>
+        )
+      )}
 
-                {index <
-                  usableSteps.length -
-                    1 && (
-                  <div
-                    className={`coach-reasoning-arrow ${
-                      index <
-                      beat
-                        ? "coach-arrow-live"
-                        : "coach-beat-hidden"
-                    }`}
-                  >
-                    →
-                  </div>
-                )}
-              </div>
-            );
-          }
-        )}
-      </div>
-
-      {operation && (
-        <OperationBanner
-          operation={
-            operation
-          }
-          active={
-            beat >= 2
-          }
-        />
+      {(relevantBeat?.text ||
+        operation) && (
+        <div className="ref-operation">
+          {relevantBeat?.text ??
+            operation}
+        </div>
       )}
     </div>
   );
 }
 
-/* ========================================
-   CODE
-======================================== */
-
 function CodeAnimation({
   code,
   highlightLine,
-  highlightText,
   operation,
-  beat = 0,
+  values = [],
+  pointers = [],
+  directorBeats = [],
   bugMode = false,
+  correctedMode = false,
 }: {
   code: string;
   highlightLine?: number;
   highlightText?: string;
   operation?: string;
+  values?: string[];
+  pointers?: Pointer[];
   beat?: number;
+  frame?: number;
+  directorBeats?:
+    AnimationDirectorBeat[];
   bugMode?: boolean;
+  correctedMode?: boolean;
 }) {
   const lines =
     useMemo(
@@ -1183,677 +1620,180 @@ function CodeAnimation({
       ]
     );
 
-  const [
-    scanComplete,
-    setScanComplete,
-  ] = useState(false);
+  const lineBeat =
+    getLastDirectorBeat(
+      directorBeats,
+      [
+        "highlight_code",
+        "scan_code",
+      ]
+    );
 
-  const liveLine =
-    highlightLine &&
-    beat >= 3
-      ? highlightLine
-      : Math.min(
+  const focusBeat =
+    getLastDirectorBeat(
+      directorBeats,
+      [
+        "focus_index",
+        "move_pointer",
+      ]
+    );
+
+  const textBeat =
+    getLastDirectorBeat(
+      directorBeats,
+      [
+        "show_equation",
+        "compare_values",
+      ]
+    );
+
+  const activeLine =
+    lineBeat?.line !==
+      undefined
+      ? Math.min(
           lines.length,
           Math.max(
             1,
-            1 +
-              beat *
-                Math.max(
-                  1,
-                  Math.ceil(
-                    lines.length /
-                      4
-                  )
-                )
+            lineBeat.line
           )
-        );
-
-  useEffect(() => {
-    setScanComplete(
-      false
-    );
-
-    const timer =
-      setTimeout(
-        () => {
-          setScanComplete(
-            true
-          );
-        },
-        850
-      );
-
-    return () => {
-      clearTimeout(
-        timer
-      );
-    };
-  }, [
-    code,
-    highlightLine,
-  ]);
-
-  return (
-    <div className="coach-algorithm-stage">
-      <div className="coach-visual-title">
-        {bugMode
-          ? "BUG SCANNER"
-          : "CODE WALKTHROUGH"}
-      </div>
-
-      <div
-        className={`ai-code-window ${
-          bugMode
-            ? "ai-code-window-bug"
-            : ""
-        }`}
-      >
-        <div className="ai-code-window-header">
-          <span />
-          <span />
-          <span />
-
-          <strong>
-            solution.py
-          </strong>
-        </div>
-
-        <div className="ai-code-body">
-          <div
-            className={`coach-code-scanner ${
-              scanComplete
-                ? "coach-code-scanner-done"
-                : ""
-            }`}
-          />
-
-          <div className="ai-code-lines">
-            {lines.map(
-              (
-                line,
-                index
-              ) => {
-                const lineNumber =
-                  index + 1;
-
-                const highlighted =
-                  highlightLine ===
-                  lineNumber;
-
-                const live =
-                  liveLine ===
-                  lineNumber;
-
-                return (
-                  <div
-                    key={
-                      `${lineNumber}-${line}`
-                    }
-                    className={`ai-code-line coach-code-line-enter ${
-                      highlighted
-                        ? bugMode
-                          ? "ai-code-highlight ai-code-bug-highlight"
-                          : "ai-code-highlight"
-                        : ""
-                    } ${
-                      live
-                        ? "coach-code-line-live"
-                        : ""
-                    }`}
-                    style={{
-                      animationDelay:
-                        `${index * 90}ms`,
-                    }}
-                  >
-                    <span className="ai-line-number">
-                      {lineNumber}
-                    </span>
-
-                    <code>
-                      {line ||
-                        " "}
-                    </code>
-
-                    {highlighted && (
-                      <div className="coach-bug-marker">
-                        <span className="coach-bug-arrow">
-                          →
-                        </span>
-
-                        <span>
-                          {bugMode
-                            ? "BUG"
-                            : "NOW"}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                );
-              }
-            )}
-          </div>
-        </div>
-      </div>
-
-      {bugMode &&
-        highlightLine && (
-          <div className="coach-found-line">
-            <span>
-              🐛
-            </span>
-
-            <div>
-              <small>
-                BUG FOUND ON LINE
-              </small>
-
-              <strong>
-                {highlightLine}
-              </strong>
-            </div>
-          </div>
-        )}
-
-      {bugMode &&
-        !highlightLine && (
-          <div className="coach-searching-line">
-            <span>
-              🔎
-            </span>
-
-            <div>
-              <small>
-                ANALYZING
-              </small>
-
-              <strong>
-                {highlightText ??
-                  "Review this code"}
-              </strong>
-            </div>
-          </div>
-        )}
-
-      {operation && (
-        <OperationBanner
-          operation={
-            operation
-          }
-          active={
-            beat >= 2
-          }
-        />
-      )}
-    </div>
-  );
-}
-
-/* ========================================
-   ARRAY
-======================================== */
-
-function ArrayVisual({
-  values,
-  activeIndices = [],
-  pointers = [],
-  operation,
-  beat = 0,
-}: {
-  values: string[];
-  activeIndices?: number[];
-  pointers?: Pointer[];
-  operation?: string;
-  beat?: number;
-}) {
-  const focusCandidates =
-    activeIndices.length >
-    0
-      ? activeIndices
-      : values.map(
-          (
-            _,
-            index
-          ) => index
-        );
-
-  const focusIndex =
-    focusCandidates[
-      Math.min(
-        beat,
-        Math.max(
-          0,
-          focusCandidates.length -
-            1
         )
-      )
-    ] ??
-    0;
-
-  return (
-    <div className="coach-algorithm-stage">
-      <div className="coach-visual-title">
-        ARRAY STATE
-      </div>
-
-      <div className="coach-array-scroll">
-        <div className="coach-array-track">
-          <span className="coach-array-bracket">
-            [
-          </span>
-
-          {values.map(
-            (
-              value,
-              index
-            ) => {
-              const active =
-                activeIndices.includes(
-                  index
-                );
-
-              const focused =
-                index ===
-                focusIndex;
-
-              const cellPointers =
-                pointers.filter(
-                  (pointer) =>
-                    pointer.index ===
-                    index
-                );
-
-              return (
-                <div
-                  className="coach-array-position"
-                  key={
-                    `${index}-${value}`
-                  }
-                  style={{
-                    animationDelay:
-                      `${index * 100}ms`,
-                  }}
-                >
-                  <div className="coach-pointer-space">
-                    {cellPointers.map(
-                      (
-                        pointer
-                      ) => (
-                        <div
-                          className={`coach-pointer ${
-                            focused
-                              ? "coach-pointer-live"
-                              : ""
-                          }`}
-                          key={
-                            pointer.label
-                          }
-                        >
-                          <span>
-                            {pointer.label}
-                          </span>
-
-                          <div className="coach-pointer-arrow">
-                            ↓
-                          </div>
-                        </div>
-                      )
-                    )}
-                  </div>
-
-                  <div
-                    className={`coach-array-box ${
-                      active
-                        ? "coach-array-box-active"
-                        : ""
-                    } ${
-                      focused
-                        ? "coach-array-box-focus-live"
-                        : ""
-                    }`}
-                  >
-                    <span className="coach-array-scan" />
-                    <span className="coach-array-value">
-                      {value}
-                    </span>
-                  </div>
-
-                  <span className="coach-array-index">
-                    {index}
-                  </span>
-                </div>
-              );
-            }
-          )}
-
-          <span className="coach-array-bracket">
-            ]
-          </span>
-        </div>
-      </div>
-
-      {operation && (
-        <OperationBanner
-          operation={
-            operation
-          }
-          active={
-            beat >= 2
-          }
-        />
-      )}
-    </div>
-  );
-}
-
-/* ========================================
-   HASH MAP
-======================================== */
-
-function HashMapVisual({
-  entries,
-  operation,
-  beat = 0,
-}: {
-  entries: HashEntry[];
-  operation?: string;
-  beat?: number;
-}) {
-  const targetIndex =
-    entries.findIndex(
-      (
-        entry
-      ) =>
-        entry.active
-    );
+      : highlightLine ??
+        1;
 
   const focusIndex =
-    beat >= 3 &&
-    targetIndex >= 0
-      ? targetIndex
-      : Math.min(
-          beat,
+    values.length > 0
+      ? Math.min(
+          values.length -
+            1,
           Math.max(
             0,
-            entries.length -
-              1
+            focusBeat
+              ?.action ===
+                "focus_index"
+              ? focusBeat.index ??
+                0
+              : focusBeat
+                  ?.action ===
+                    "move_pointer"
+                ? focusBeat.toIndex ??
+                  0
+                : pointers[0]
+                    ?.index ??
+                  0
           )
-        );
+        )
+      : 0;
 
-  return (
-    <div className="coach-algorithm-stage">
-      <div className="coach-visual-title">
-        HASH MAP
-      </div>
-
-      <div className="coach-hashmap">
-        <div className="coach-hash-header">
-          <span>
-            KEY
-          </span>
-
-          <span>
-            VALUE
-          </span>
-        </div>
-
-        {entries.map(
-          (
-            entry,
-            index
-          ) => (
-            <div
-              key={
-                `${entry.key}-${index}`
-              }
-              className={`coach-hash-row ${
-                entry.active
-                  ? "coach-hash-row-active"
-                  : ""
-              } ${
-                index ===
-                focusIndex
-                  ? "coach-hash-row-live"
-                  : ""
-              }`}
-              style={{
-                animationDelay:
-                  `${index * 130}ms`,
-              }}
-            >
-              <span className="coach-hash-key">
-                {entry.key}
-              </span>
-
-              <span className="coach-hash-connector">
-                →
-              </span>
-
-              <span className="coach-hash-value">
-                {entry.value}
-              </span>
-
-              {entry.active && (
-                <span className="coach-found-badge">
-                  MATCH
-                </span>
-              )}
-            </div>
-          )
-        )}
-      </div>
-
-      {operation && (
-        <OperationBanner
-          operation={
-            operation
-          }
-          active={
-            beat >= 2
-          }
-        />
-      )}
-    </div>
-  );
-}
-
-/* ========================================
-   STACK
-======================================== */
-
-function StackVisual({
-  stack,
-  operation,
-  beat = 0,
-}: {
-  stack: string[];
-  operation?: string;
-  beat?: number;
-}) {
-  const reversed =
-    [
-      ...stack,
-    ].reverse();
-
-  const liveIndex =
-    Math.min(
-      beat,
-      Math.max(
-        0,
-        reversed.length -
-          1
-      )
+  const directedPointers =
+    applyPointerHistory(
+      pointers,
+      directorBeats,
+      values.length - 1
     );
 
   return (
-    <div className="coach-algorithm-stage">
-      <div className="coach-visual-title">
-        STACK
-      </div>
-
-      <div className="coach-stack-wrapper">
-        <div className="coach-stack-container">
-          {reversed.map(
-              (
-                value,
-                index
-              ) => (
-                <div
-                  className={`coach-stack-box ${
-                    index ===
-                    liveIndex
-                      ? "coach-stack-box-live"
-                      : ""
-                  }`}
-                  key={
-                    `${index}-${value}`
-                  }
-                  style={{
-                    animationDelay:
-                      `${index * 110}ms`,
-                  }}
-                >
-                  {value}
-                </div>
-              )
-            )}
-        </div>
-      </div>
-
-      {operation && (
-        <OperationBanner
-          operation={
-            operation
-          }
-          active={
-            beat >= 2
-          }
-        />
-      )}
-    </div>
-  );
-}
-
-/* ========================================
-   COMPLEXITY
-======================================== */
-
-function ComplexityVisual({
-  reasoningSteps,
-  operation,
-  beat = 0,
-}: {
-  reasoningSteps?: string[];
-  operation?: string;
-  beat?: number;
-}) {
-  return (
-    <div className="coach-algorithm-stage">
-      <div className="coach-visual-title">
-        COMPLEXITY
-      </div>
-
-      {reasoningSteps &&
-      reasoningSteps.length >
-        0 ? (
-        <ReasoningVisual
-          steps={
-            reasoningSteps
-          }
-          operation={
-            operation
-          }
-          beat={
-            beat
-          }
-        />
-      ) : (
-        <>
-          <div className="coach-complexity">
-            <div
-              className={`coach-complexity-before ${
-                beat >= 1
-                  ? "coach-complexity-before-live"
-                  : ""
-              }`}
-            >
-              <span>
-                Before
-              </span>
-
-              <strong>
-                O(n²)
-              </strong>
-            </div>
-
-            <div
-              className={`coach-complexity-transition ${
-                beat >= 2
-                  ? "coach-complexity-arrow-live"
-                  : ""
-              }`}
-            >
-              →
-            </div>
-
-            <div
-              className={`coach-complexity-after ${
-                beat >= 3
-                  ? "coach-complexity-after-live"
-                  : ""
-              }`}
-            >
-              <span>
-                Optimized
-              </span>
-
-              <strong>
-                O(n)
-              </strong>
-            </div>
-          </div>
-
-          {operation && (
-            <OperationBanner
-              operation={
-                operation
-              }
-              active={
-                beat >= 3
-              }
-            />
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-/* ========================================
-   TAKEAWAY
-======================================== */
-
-function TakeawayVisual({
-  takeaway,
-  beat = 0,
-}: {
-  takeaway: string;
-  beat?: number;
-}) {
-  return (
     <div
-      className={`coach-takeaway coach-takeaway-expressive ${
-        beat >= 1
-          ? "coach-takeaway-live"
+      className={`ref-code-scene ${
+        values.length >
+        0
+          ? "ref-code-with-data"
+          : ""
+      } ${
+        correctedMode
+          ? "ref-code-corrected"
           : ""
       }`}
     >
-      <div className="coach-confetti" aria-hidden="true">
-        {Array.from(
-          {
-            length:
-              10,
+      <div className="ref-code-block">
+        {lines.map(
+          (
+            line,
+            index
+          ) => {
+            const number =
+              index + 1;
+
+            const live =
+              number ===
+              activeLine;
+
+            const bug =
+              bugMode &&
+              number ===
+                highlightLine;
+
+            return (
+              <div
+                key={
+                  `${number}-${line}`
+                }
+                className={`ref-code-line ${
+                  live
+                    ? "ref-code-live"
+                    : ""
+                } ${
+                  bug
+                    ? "ref-code-bug"
+                    : ""
+                }`}
+              >
+                <span>
+                  {number}
+                </span>
+
+                <code>
+                  {line ||
+                    " "}
+                </code>
+              </div>
+            );
           }
-        ).map(
+        )}
+      </div>
+
+      {values.length >
+        0 && (
+        <div className="ref-code-data">
+          <ReferenceArrayStrip
+            values={
+              values
+            }
+            pointers={
+              directedPointers
+            }
+            focusIndex={
+              focusIndex
+            }
+          />
+        </div>
+      )}
+
+      {(textBeat?.text ||
+        operation) && (
+        <div className="ref-operation">
+          {textBeat?.text ??
+            operation}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReferenceArrayStrip({
+  values,
+  pointers = [],
+  focusIndex,
+  activeIndices = [],
+}: {
+  values: string[];
+  pointers?: Pointer[];
+  focusIndex: number;
+  activeIndices?: number[];
+}) {
+  return (
+    <div className="ref-array-shell">
+      <div className="ref-index-row">
+        {values.map(
           (
             _,
             index
@@ -1862,66 +1802,965 @@ function TakeawayVisual({
               key={
                 index
               }
-              style={
-                {
-                  "--spark":
-                    index,
-                } as
-                  CSSProperties
-              }
-            />
+            >
+              {index}
+            </span>
           )
         )}
       </div>
-      <div className="coach-check">
-        ✓
-      </div>
 
-      <div>
-        <span className="coach-takeaway-label">
-          KEY TAKEAWAY
-        </span>
+      <div className="ref-array-row">
+        {values.map(
+          (
+            value,
+            index
+          ) => {
+            const pointerHere =
+              pointers.find(
+                (
+                  pointer
+                ) =>
+                  pointer.index ===
+                  index
+              );
 
-        <strong>
-          {takeaway}
-        </strong>
+            const active =
+              index ===
+                focusIndex ||
+              activeIndices.includes(
+                index
+              );
+
+            return (
+              <div
+                key={
+                  `${index}-${value}`
+                }
+                className={`ref-cell ${
+                  active
+                    ? "ref-cell-active"
+                    : ""
+                }`}
+              >
+                {value}
+
+                {pointerHere && (
+                  <div className="ref-array-pointer">
+                    <span>
+                      {pointerHere.label}
+                    </span>
+
+                    <i />
+                  </div>
+                )}
+              </div>
+            );
+          }
+        )}
       </div>
     </div>
   );
 }
 
-/* ========================================
-   OPERATION BANNER
-======================================== */
-
-function OperationBanner({
+function ArrayVisual({
+  values,
+  activeIndices = [],
+  pointers = [],
   operation,
-  active = false,
+  directorBeats = [],
 }: {
-  operation: string;
-  active?: boolean;
+  values: string[];
+  activeIndices?: number[];
+  pointers?: Pointer[];
+  operation?: string;
+  beat?: number;
+  frame?: number;
+  directorBeats?:
+    AnimationDirectorBeat[];
 }) {
-  return (
-    <div
-      className={`coach-operation-banner ${
-        active
-          ? "coach-operation-live"
-          : ""
-      }`}
-    >
-      <span className="coach-operation-icon">
-        ⚡
-      </span>
+  const focusBeat =
+    getLastDirectorBeat(
+      directorBeats,
+      [
+        "focus_index",
+        "move_pointer",
+      ]
+    );
 
-      <div>
-        <span className="coach-operation-label">
-          CURRENT OPERATION
+  const textBeat =
+    getLastDirectorBeat(
+      directorBeats,
+      [
+        "show_equation",
+        "compare_values",
+      ]
+    );
+
+  const initialFocus =
+    activeIndices[0] ??
+    pointers[0]?.index ??
+    0;
+
+  const focusIndex =
+    Math.min(
+      Math.max(
+        0,
+        focusBeat
+          ?.action ===
+            "focus_index"
+          ? focusBeat.index ??
+            initialFocus
+          : focusBeat
+              ?.action ===
+                "move_pointer"
+            ? focusBeat.toIndex ??
+              initialFocus
+            : initialFocus
+      ),
+      Math.max(
+        0,
+        values.length - 1
+      )
+    );
+
+  const directedPointers =
+    applyPointerHistory(
+      pointers,
+      directorBeats,
+      values.length - 1
+    );
+
+  return (
+    <div className="ref-array-scene">
+      {(textBeat?.text ||
+        operation) && (
+        <div className="ref-equation">
+          {textBeat?.text ??
+            operation}
+        </div>
+      )}
+
+      <ReferenceArrayStrip
+        values={
+          values
+        }
+        pointers={
+          directedPointers
+        }
+        activeIndices={
+          activeIndices
+        }
+        focusIndex={
+          focusIndex
+        }
+      />
+
+      <div className="ref-array-trace">
+        <span>
+          i = {focusIndex}
         </span>
 
-        <strong>
-          {operation}
-        </strong>
+        <i />
+
+        <span>
+          value ={" "}
+          {values[
+            focusIndex
+          ] ??
+            "—"}
+        </span>
       </div>
+    </div>
+  );
+}
+
+function HashMapVisual({
+  entries,
+  operation,
+  directorBeats = [],
+}: {
+  entries: HashEntry[];
+  operation?: string;
+  beat?: number;
+  frame?: number;
+  directorBeats?:
+    AnimationDirectorBeat[];
+}) {
+  const safeEntries =
+    entries.slice(
+      0,
+      8
+    );
+
+  const hashBeat =
+    getLastDirectorBeat(
+      directorBeats,
+      [
+        "hash_lookup",
+        "hash_insert",
+      ]
+    );
+
+  const directedKey =
+    hashBeat?.key;
+
+  const directedFocus =
+    directedKey
+      ? safeEntries.findIndex(
+          (
+            entry
+          ) =>
+            entry.key ===
+            directedKey
+        )
+      : -1;
+
+  const focus =
+    directedFocus >=
+      0
+      ? directedFocus
+      : Math.max(
+          0,
+          safeEntries.findIndex(
+            (
+              entry
+            ) =>
+              entry.active
+          )
+        );
+
+  const focusEntry =
+    safeEntries[
+      focus
+    ];
+
+  /*
+    Keep the table visible and static. The Director
+    only changes the highlighted lookup/insert slot.
+  */
+  const visibleCount =
+    safeEntries.length;
+
+  return (
+    <div className="ref-hash-scene">
+      <div className="ref-hash-pipeline">
+        <div className="ref-pair-box">
+          <span>
+            {focusEntry?.key ??
+              "key"}
+          </span>
+
+          <span>
+            {focusEntry?.value ??
+              "value"}
+          </span>
+        </div>
+
+        <i>
+          →
+        </i>
+
+        <div className="ref-hash-box">
+          hash function
+        </div>
+
+        <i>
+          →
+        </i>
+
+        <code>
+          {focusEntry
+            ? `0x${(
+                focusEntry.key +
+                focusEntry.value
+              )
+                .split(
+                  ""
+                )
+                .reduce(
+                  (
+                    total,
+                    char
+                  ) =>
+                    (
+                      total *
+                        31 +
+                      char.charCodeAt(
+                        0
+                      )
+                    ) %
+                    0xffffff,
+                  7
+                )
+                .toString(
+                  16
+                )
+                .padStart(
+                  6,
+                  "0"
+                )}`
+            : "0x000000"}
+        </code>
+      </div>
+
+      <div className="ref-hash-arrow">
+        ↓
+      </div>
+
+      <div
+        className="ref-hash-table"
+        style={{
+          "--cols":
+            Math.max(
+              4,
+              safeEntries.length
+            ),
+        } as
+          CSSProperties}
+      >
+        <div className="ref-hash-label">
+          key
+        </div>
+
+        {Array.from(
+          {
+            length:
+              Math.max(
+                4,
+                safeEntries.length
+              ),
+          }
+        ).map(
+          (
+            _,
+            index
+          ) => (
+            <div
+              key={
+                `key-${index}`
+              }
+              className={`ref-hash-slot ${
+                index ===
+                focus
+                  ? "ref-hash-slot-active"
+                  : ""
+              }`}
+            >
+              {index <
+              visibleCount
+                ? safeEntries[
+                    index
+                  ]?.key
+                : ""}
+            </div>
+          )
+        )}
+
+        <div className="ref-hash-label">
+          value
+        </div>
+
+        {Array.from(
+          {
+            length:
+              Math.max(
+                4,
+                safeEntries.length
+              ),
+          }
+        ).map(
+          (
+            _,
+            index
+          ) => (
+            <div
+              key={
+                `value-${index}`
+              }
+              className={`ref-hash-slot ${
+                index ===
+                focus
+                  ? "ref-hash-slot-active ref-hash-value-active"
+                  : ""
+              }`}
+            >
+              {index <
+              visibleCount
+                ? safeEntries[
+                    index
+                  ]?.value
+                : ""}
+            </div>
+          )
+        )}
+      </div>
+
+      {operation && (
+        <div className="ref-operation">
+          {operation}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StackVisual({
+  stack,
+  values = [],
+  activeIndices = [],
+  operation,
+  directorBeats = [],
+}: {
+  stack: string[];
+  values?: string[];
+  activeIndices?: number[];
+  operation?: string;
+  beat?: number;
+  frame?: number;
+  directorBeats?:
+    AnimationDirectorBeat[];
+}) {
+  const stackBeat =
+    getLastDirectorBeat(
+      directorBeats,
+      [
+        "stack_push",
+        "stack_pop",
+      ]
+    );
+
+  const focusBeat =
+    getLastDirectorBeat(
+      directorBeats,
+      [
+        "focus_index",
+      ]
+    );
+
+  const initialFocus =
+    activeIndices[0] ??
+    0;
+
+  const focusIndex =
+    values.length > 0
+      ? Math.min(
+          values.length - 1,
+          Math.max(
+            0,
+            focusBeat?.index ??
+              initialFocus
+          )
+        )
+      : 0;
+
+  const directedValueIndex =
+    stackBeat?.value
+      ? stack.indexOf(
+          stackBeat.value
+        )
+      : -1;
+
+  const visibleCount =
+    stackBeat?.action ===
+      "stack_push" &&
+    directedValueIndex >= 0
+      ? directedValueIndex + 1
+      : stackBeat?.action ===
+          "stack_pop" &&
+        directedValueIndex >= 0
+        ? Math.max(
+            0,
+            directedValueIndex
+          )
+        : stack.length;
+
+  const visible =
+    stack.slice(
+      0,
+      visibleCount
+    );
+
+  return (
+    <div className="ref-stack-scene">
+      {values.length >
+        0 && (
+        <div className="ref-stack-source">
+          <span className="ref-structure-label">
+            input
+          </span>
+
+          <ReferenceArrayStrip
+            values={
+              values
+            }
+            activeIndices={
+              activeIndices
+            }
+            focusIndex={
+              focusIndex
+            }
+          />
+        </div>
+      )}
+
+      <div className="ref-stack-relationship">
+        <span>
+          {stackBeat?.action ===
+            "stack_pop"
+            ? "pop →"
+            : stackBeat?.action ===
+                "stack_push"
+              ? "push →"
+              : "→"}
+        </span>
+      </div>
+
+      <div className="ref-stack-work">
+        <span className="ref-structure-label">
+          stack
+        </span>
+
+        <div className="ref-stack-column">
+          {visible.length >
+          0 ? (
+            visible
+              .slice()
+              .reverse()
+              .map(
+                (
+                  item,
+                  index
+                ) => (
+                  <div
+                    key={
+                      `${item}-${index}`
+                    }
+                    className={
+                      index === 0
+                        ? "ref-stack-top"
+                        : ""
+                    }
+                  >
+                    {item}
+                  </div>
+                )
+              )
+          ) : (
+            <div className="ref-stack-empty">
+              empty
+            </div>
+          )}
+
+          <span className="ref-stack-base">
+            top
+          </span>
+        </div>
+      </div>
+
+      {operation && (
+        <div className="ref-operation ref-stack-operation">
+          {operation}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TreeVisual({
+  values,
+  activeIndices = [],
+  queue = [],
+  operation,
+  directorBeats = [],
+}: {
+  values: string[];
+  activeIndices?: number[];
+  queue?: string[];
+  operation?: string;
+  directorBeats?:
+    AnimationDirectorBeat[];
+}) {
+  const focusBeat =
+    getLastDirectorBeat(
+      directorBeats,
+      [
+        "focus_index",
+      ]
+    );
+
+  const queueBeat =
+    getLastDirectorBeat(
+      directorBeats,
+      [
+        "queue_enqueue",
+        "queue_dequeue",
+      ]
+    );
+
+  const focusIndex =
+    Math.min(
+      Math.max(
+        0,
+        focusBeat?.index ??
+          activeIndices[0] ??
+          0
+      ),
+      Math.max(
+        0,
+        values.length - 1
+      )
+    );
+
+  const workingQueue =
+    [...queue];
+
+  if (
+    queueBeat?.action ===
+      "queue_enqueue" &&
+    queueBeat.value &&
+    !workingQueue.includes(
+      queueBeat.value
+    )
+  ) {
+    workingQueue.push(
+      queueBeat.value
+    );
+  }
+
+  if (
+    queueBeat?.action ===
+      "queue_dequeue" &&
+    queueBeat.value
+  ) {
+    const removeIndex =
+      workingQueue.indexOf(
+        queueBeat.value
+      );
+
+    if (
+      removeIndex >= 0
+    ) {
+      workingQueue.splice(
+        removeIndex,
+        1
+      );
+    }
+  }
+
+  const visibleNodes =
+    values
+      .map(
+        (
+          value,
+          index
+        ) => ({
+          value,
+          index,
+        })
+      )
+      .filter(
+        (
+          node
+        ) =>
+          node.value
+            .toLowerCase() !==
+          "null"
+      );
+
+  function getNodePosition(
+    index:
+      number
+  ) {
+    const level =
+      Math.floor(
+        Math.log2(
+          index + 1
+        )
+      );
+
+    const firstIndex =
+      2 ** level -
+      1;
+
+    const positionInLevel =
+      index -
+      firstIndex;
+
+    const nodesInLevel =
+      2 ** level;
+
+    return {
+      x:
+        (
+          positionInLevel +
+          0.5
+        ) /
+        nodesInLevel *
+        100,
+      y:
+        12 +
+        level *
+          29,
+    };
+  }
+
+  return (
+    <div className="ref-tree-scene">
+      <div className="ref-tree-source">
+        <span className="ref-structure-label">
+          tree
+        </span>
+
+        <div className="ref-tree-canvas">
+          <svg
+            className="ref-tree-edges"
+            viewBox="0 0 100 100"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            {visibleNodes.map(
+              (
+                node
+              ) => {
+                if (
+                  node.index ===
+                  0
+                ) {
+                  return null;
+                }
+
+                const parentIndex =
+                  Math.floor(
+                    (
+                      node.index -
+                      1
+                    ) /
+                    2
+                  );
+
+                const parentValue =
+                  values[
+                    parentIndex
+                  ];
+
+                if (
+                  !parentValue ||
+                  parentValue
+                    .toLowerCase() ===
+                    "null"
+                ) {
+                  return null;
+                }
+
+                const from =
+                  getNodePosition(
+                    parentIndex
+                  );
+
+                const to =
+                  getNodePosition(
+                    node.index
+                  );
+
+                return (
+                  <line
+                    key={
+                      `edge-${parentIndex}-${node.index}`
+                    }
+                    x1={
+                      from.x
+                    }
+                    y1={
+                      from.y
+                    }
+                    x2={
+                      to.x
+                    }
+                    y2={
+                      to.y
+                    }
+                  />
+                );
+              }
+            )}
+          </svg>
+
+          {visibleNodes.map(
+            (
+              node
+            ) => {
+              const position =
+                getNodePosition(
+                  node.index
+                );
+
+              const active =
+                node.index ===
+                  focusIndex ||
+                activeIndices.includes(
+                  node.index
+                );
+
+              return (
+                <div
+                  key={
+                    `node-${node.index}-${node.value}`
+                  }
+                  className={`ref-tree-node ${
+                    active
+                      ? "ref-tree-node-active"
+                      : ""
+                  }`}
+                  style={{
+                    left:
+                      `${position.x}%`,
+                    top:
+                      `${position.y}%`,
+                  }}
+                >
+                  {node.value}
+                </div>
+              );
+            }
+          )}
+        </div>
+      </div>
+
+      <div className="ref-tree-middle">
+        {operation && (
+          <div className="ref-tree-operation">
+            {operation}
+          </div>
+        )}
+      </div>
+
+      <div className="ref-tree-queue">
+        <span className="ref-structure-label">
+          queue
+        </span>
+
+        <div className="ref-queue-row">
+          {workingQueue.length >
+          0 ? (
+            workingQueue.map(
+              (
+                item,
+                index
+              ) => (
+                <div
+                  key={
+                    `${item}-${index}`
+                  }
+                  className={
+                    index === 0
+                      ? "ref-queue-front"
+                      : ""
+                  }
+                >
+                  {item}
+                </div>
+              )
+            )
+          ) : (
+            <div className="ref-queue-empty">
+              empty
+            </div>
+          )}
+        </div>
+
+        <div className="ref-queue-meta">
+          size ={" "}
+          {workingQueue.length}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ComplexityVisual({
+  reasoningSteps = [],
+  operation,
+  directorBeats = [],
+}: {
+  reasoningSteps?: string[];
+  operation?: string;
+  beat?: number;
+  frame?: number;
+  directorBeats?:
+    AnimationDirectorBeat[];
+}) {
+  const directed =
+    getLastDirectorBeat(
+      directorBeats,
+      [
+        "show_complexity",
+      ]
+    );
+
+  const step =
+    directed?.text ??
+    reasoningSteps[0] ??
+    operation ??
+    "compare the tradeoff";
+
+  return (
+    <div className="ref-complexity-scene">
+      <div className="ref-complexity-label ref-complexity-slow">
+        {directed?.from ??
+          "O(n²) time"}
+      </div>
+
+      <div className="ref-complexity-center">
+        <span>
+          {step}
+        </span>
+
+        <div className="ref-complexity-axis">
+          <i />
+          <b />
+          <i />
+        </div>
+      </div>
+
+      <div className="ref-complexity-label ref-complexity-fast">
+        {directed?.to ??
+          "O(n) time"}
+      </div>
+    </div>
+  );
+}
+
+function TakeawayVisual({
+  takeaway,
+  directorBeats = [],
+}: {
+  takeaway: string;
+  beat?: number;
+  frame?: number;
+  directorBeats?:
+    AnimationDirectorBeat[];
+}) {
+  return (
+    <div className="ref-takeaway-scene">
+      <div className="ref-takeaway-mark">
+        ✓
+      </div>
+
+      <div className="ref-takeaway-line" />
+
+      <strong>
+        {getLastDirectorBeat(
+          directorBeats,
+          [
+            "emphasize_result",
+          ]
+        )?.text ??
+          takeaway}
+      </strong>
+
+      <span className="ref-takeaway-cursor">
+        _
+      </span>
     </div>
   );
 }

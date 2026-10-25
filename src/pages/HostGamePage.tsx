@@ -23,8 +23,9 @@ import {
   useCountdown,
 } from "../hooks/useCountdown";
 
-import AICoachAnimation
-  from "../components/AICoachAnimation";
+import AICoachAnimation, {
+  type AnimationDirectorPlan,
+} from "../components/AICoachAnimation";
 
 import {
   getQuestionTypeForRound,
@@ -182,6 +183,14 @@ function HostGamePage() {
   } =
     useParams();
 
+  const [
+    animationPlan,
+    setAnimationPlan,
+  ] =
+    useState<
+      AnimationDirectorPlan | null
+    >(null);
+
   /* ========================================
      REFS
   ======================================== */
@@ -218,6 +227,8 @@ function HostGamePage() {
       round: number;
       data:
         GeneratedExplanation;
+      plan:
+        AnimationDirectorPlan | null;
     } | null>(
       null
     );
@@ -448,6 +459,13 @@ const powerupEvents =
         .generateExplanation
     );
 
+  const generateAnimationPlan =
+    useAction(
+      (api as any)
+        .aiAnimationDirector
+        .directAnimation
+    );
+
 
   /* ========================================
      TIMER
@@ -578,6 +596,10 @@ const powerupEvents =
             round:
               nextRound,
           });
+
+          setAnimationPlan(
+            null
+          );
 
           prefetchedQuestionRef.current =
             null;
@@ -1130,10 +1152,49 @@ const powerupEvents =
           codeSnippet,
         })
           .then(
-            (
+            async (
               explanation:
                 GeneratedExplanation
             ) => {
+              let plan:
+                AnimationDirectorPlan | null =
+                null;
+
+              try {
+                plan =
+                  await generateAnimationPlan(
+                    {
+                      question:
+                        currentQuestion,
+
+                      questionType,
+
+                      correctAnswer:
+                        currentChoices[
+                          correctAnswer
+                        ] ??
+                        "Unknown",
+
+                      codeSnippet,
+
+                      scenes:
+                        explanation.scenes,
+                    }
+                  ) as
+                    AnimationDirectorPlan;
+
+                console.log(
+                  "🎬 Animation Director prefetched"
+                );
+              } catch (
+                directorError
+              ) {
+                console.warn(
+                  "Animation Director prefetch failed. Coach will use scene defaults:",
+                  directorError
+                );
+              }
+
               prefetchedExplanationRef.current =
                 {
                   round:
@@ -1141,6 +1202,8 @@ const powerupEvents =
 
                   data:
                     explanation,
+
+                  plan,
                 };
 
               console.log(
@@ -1177,6 +1240,7 @@ const powerupEvents =
     room?.codeSnippet,
     generateQuestion,
     generateExplanation,
+    generateAnimationPlan,
   ]);
 
   /* ========================================
@@ -1456,6 +1520,10 @@ const powerupEvents =
           if (
             someoneCorrect
           ) {
+            setAnimationPlan(
+              null
+            );
+
             await loadNextRound(
               roomId,
               currentRound,
@@ -1484,6 +1552,10 @@ const powerupEvents =
             let explanation:
               GeneratedExplanation;
 
+            let directedPlan:
+              AnimationDirectorPlan | null =
+              null;
+
             const prefetched =
               prefetchedExplanationRef
                 .current;
@@ -1495,6 +1567,9 @@ const powerupEvents =
             ) {
               explanation =
                 prefetched.data;
+
+              directedPlan =
+                prefetched.plan;
             } else {
               explanation =
                 await generateExplanation(
@@ -1512,7 +1587,42 @@ const powerupEvents =
                     codeSnippet,
                   }
                 );
+
+              try {
+                directedPlan =
+                  await generateAnimationPlan(
+                    {
+                      question:
+                        currentQuestion,
+
+                      questionType,
+
+                      correctAnswer:
+                        currentChoices[
+                          correctAnswer
+                        ] ??
+                        "Unknown",
+
+                      codeSnippet,
+
+                      scenes:
+                        explanation.scenes,
+                    }
+                  ) as
+                    AnimationDirectorPlan;
+              } catch (
+                directorError
+              ) {
+                console.warn(
+                  "Animation Director failed. Using scene defaults:",
+                  directorError
+                );
+              }
             }
+
+            setAnimationPlan(
+              directedPlan
+            );
 
             await setExplanation({
               roomId,
@@ -1563,6 +1673,7 @@ const powerupEvents =
     room?.codeSnippet,
     answers,
     generateExplanation,
+    generateAnimationPlan,
     setExplanation,
     loadNextRound,
     finishGame,
@@ -1659,6 +1770,10 @@ const powerupEvents =
         );
       }
 
+
+      setAnimationPlan(
+        null
+      );
 
       prefetchedQuestionRef.current =
         null;
@@ -2059,6 +2174,9 @@ const powerupEvents =
           }
           fallbackCode={
             room.codeSnippet
+          }
+          animationPlan={
+            animationPlan
           }
           onComplete={
             async () => {

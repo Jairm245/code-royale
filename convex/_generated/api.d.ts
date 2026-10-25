@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as aiAnimationDirector from "../aiAnimationDirector.js";
 import type * as aiExplanation from "../aiExplanation.js";
 import type * as aiQuestions from "../aiQuestions.js";
 import type * as aiVoice from "../aiVoice.js";
@@ -27,6 +28,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  aiAnimationDirector: typeof aiAnimationDirector;
   aiExplanation: typeof aiExplanation;
   aiQuestions: typeof aiQuestions;
   aiVoice: typeof aiVoice;

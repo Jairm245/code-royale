@@ -19,6 +19,26 @@ export type GeneratedVoiceOptions = {
       error:
         unknown
     ) => void;
+
+  /*
+    0 -> 1 playback progress.
+
+    Streaming MP3 duration is not always available
+    immediately, so the player begins with a text-
+    based duration estimate and automatically uses
+    the real audio duration if the browser exposes it.
+  */
+  onProgress?:
+    (
+      progress:
+        number,
+
+      currentTime:
+        number,
+
+      duration:
+        number
+    ) => void;
 };
 
 function getConvexSiteUrl() {
@@ -34,6 +54,10 @@ function getConvexSiteUrl() {
         };
       };
 
+  /*
+    Prefer an explicit HTTP-actions URL when one
+    exists.
+  */
   const explicitSiteUrl =
     viteMeta.env
       ?.VITE_CONVEX_SITE_URL;
@@ -45,6 +69,12 @@ function getConvexSiteUrl() {
     );
   }
 
+  /*
+    Standard Convex Vite projects normally expose
+    VITE_CONVEX_URL. Convert the normal
+    *.convex.cloud API URL to the *.convex.site
+    HTTP-actions URL.
+  */
   const convexUrl =
     viteMeta.env
       ?.VITE_CONVEX_URL;
@@ -68,6 +98,10 @@ function getConvexSiteUrl() {
     }
   }
 
+  /*
+    Fallback for the current Code Royale Convex
+    deployment.
+  */
   return "https://oceanic-snail-433.convex.site";
 }
 
@@ -126,7 +160,10 @@ export async function playGeneratedVoice(
 
   options:
     GeneratedVoiceOptions =
-      {}
+      {},
+
+  estimatedDurationSeconds:
+    number = 12
 ) {
   stopGeneratedVoice();
 
@@ -144,8 +181,82 @@ export async function playGeneratedVoice(
   audio.preload =
     "auto";
 
+  let progressAnimation:
+    number | null =
+    null;
+
+  function stopProgressLoop() {
+    if (
+      progressAnimation !==
+      null
+    ) {
+      cancelAnimationFrame(
+        progressAnimation
+      );
+
+      progressAnimation =
+        null;
+    }
+  }
+
+  function getDuration() {
+    if (
+      Number.isFinite(
+        audio.duration
+      ) &&
+      audio.duration >
+        0
+    ) {
+      return audio.duration;
+    }
+
+    return Math.max(
+      1,
+      estimatedDurationSeconds
+    );
+  }
+
+  function reportProgress() {
+    if (
+      token !==
+      playbackToken
+    ) {
+      return;
+    }
+
+    const duration =
+      getDuration();
+
+    /*
+      Keep streaming progress below 1 until
+      onended fires. That prevents the visual
+      timeline from completing before narration.
+    */
+    const progress =
+      Math.min(
+        0.985,
+        Math.max(
+          0,
+          audio.currentTime /
+            duration
+        )
+      );
+
+    options.onProgress?.(
+      progress,
+      audio.currentTime,
+      duration
+    );
+
+    progressAnimation =
+      requestAnimationFrame(
+        reportProgress
+      );
+  }
+
   const cleanup =
     () => {
+      stopProgressLoop();
       if (
         activeAudio ===
         audio
@@ -165,6 +276,19 @@ export async function playGeneratedVoice(
       }
 
       options.onStart?.();
+
+      stopProgressLoop();
+
+      options.onProgress?.(
+        0,
+        audio.currentTime,
+        getDuration()
+      );
+
+      progressAnimation =
+        requestAnimationFrame(
+          reportProgress
+        );
     };
 
   audio.onended =
@@ -176,6 +300,14 @@ export async function playGeneratedVoice(
         cleanup();
         return;
       }
+
+      stopProgressLoop();
+
+      options.onProgress?.(
+        1,
+        audio.currentTime,
+        getDuration()
+      );
 
       cleanup();
 
@@ -221,6 +353,51 @@ export async function playGeneratedVoice(
   }
 }
 
+function estimateSpeechDuration(
+  text:
+    string,
+
+  sceneType:
+    string
+) {
+  const words =
+    text
+      .trim()
+      .split(
+        /\s+/
+      )
+      .filter(
+        Boolean
+      )
+      .length;
+
+  const punctuationPauses =
+    (
+      text.match(
+        /[.!?;:]/g
+      ) ??
+      []
+    ).length;
+
+  /*
+    Slightly conservative estimate so visuals
+    never race ahead of the narration.
+  */
+  const wordsPerSecond =
+    sceneType ===
+      "question"
+      ? 2.65
+      : 2.35;
+
+  return Math.max(
+    2.5,
+    words /
+      wordsPerSecond +
+      punctuationPauses *
+        0.16
+  );
+}
+
 export async function playStreamingVoice(
   text:
     string,
@@ -240,7 +417,11 @@ export async function playStreamingVoice(
 
   return playGeneratedVoice(
     url,
-    options
+    options,
+    estimateSpeechDuration(
+      text,
+      sceneType
+    )
   );
 }
 

@@ -1,9 +1,14 @@
 export const QUESTION_ROTATION = [
   "data_structure",
-  "optimal_approach",
   "bug_hunt",
-  "complexity",
+  "data_structure",
+  "bug_hunt",
+  "optimal_approach",
+  "data_structure",
+  "bug_hunt",
   "edge_case",
+  "data_structure",
+  "bug_hunt",
 ] as const;
 
 export type QuestionType =
@@ -13,11 +18,16 @@ export function getQuestionTypeForRound(
   round: number
 ): QuestionType {
   const safeRound =
-    Math.max(1, round);
+    Math.max(
+      1,
+      round
+    );
 
   const index =
     (safeRound - 1) %
     QUESTION_ROTATION.length;
 
-  return QUESTION_ROTATION[index];
+  return QUESTION_ROTATION[
+    index
+  ];
 }
