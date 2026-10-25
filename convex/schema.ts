@@ -20,6 +20,7 @@ export default defineSchema({
       v.array(v.string())
     ),
 
+
     correctAnswer: v.optional(
       v.number()
     ),
@@ -46,6 +47,11 @@ export default defineSchema({
           type: v.string(),
           title: v.string(),
           text: v.string(),
+
+          narration:
+  v.optional(
+    v.string()
+  ),
 
           code: v.optional(
             v.string()
@@ -113,6 +119,7 @@ export default defineSchema({
                   v.string()
                 )
               ),
+              
             })
           ),
         })
@@ -149,10 +156,60 @@ export default defineSchema({
     firewallActive: v.optional(
       v.boolean()
     ),
+    fiftyFiftyActive:
+  v.optional(
+    v.boolean()
+  ),
+
+firewallBlockedThisRound:
+  v.optional(
+    v.boolean()
+  ),
+
+effectsRound:
+  v.optional(
+    v.number()
+  ),
+
+lastLagRewardRound:
+  v.optional(
+    v.number()
+  ),
   }).index(
     "by_room",
     ["roomId"]
   ),
+  powerupQueue: defineTable({
+  roomId:
+    v.id("rooms"),
+
+  sourcePlayerId:
+    v.id("players"),
+
+  targetPlayerId:
+    v.optional(
+      v.id("players")
+    ),
+
+  type:
+    v.union(
+      v.literal("lag"),
+      v.literal("firewall"),
+      v.literal("fifty")
+    ),
+
+  effectiveRound:
+    v.number(),
+
+  createdAt:
+    v.number(),
+}).index(
+  "by_room_round",
+  [
+    "roomId",
+    "effectiveRound",
+  ]
+),
 
   answers: defineTable({
     roomId: v.id("rooms"),

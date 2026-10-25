@@ -1,0 +1,679 @@
+/* =========================================================
+   CODE ROYALE â€” EXPRESSIVE AI COACH LAYER
+   Imported only by AICoachAnimation.tsx
+========================================================= */
+
+.ai-avatar-expressive {
+  position: relative;
+  overflow: visible;
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.ai-avatar-expressive > span {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+}
+
+.ai-avatar-speaking {
+  animation:
+    coachAvatarTalk 520ms
+    ease-in-out
+    infinite alternate;
+  box-shadow:
+    0 0 0 8px rgba(158,119,255,0.08),
+    0 0 36px rgba(158,119,255,0.28);
+}
+
+.coach-voice-wave {
+  position: absolute;
+  left: 50%;
+  bottom: -14px;
+  z-index: 4;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 14px;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.ai-avatar-speaking .coach-voice-wave {
+  opacity: 1;
+}
+
+.coach-voice-wave i {
+  width: 3px;
+  height: 5px;
+  border-radius: 999px;
+  background: #c9b3ff;
+  animation:
+    coachVoiceBar 460ms
+    ease-in-out
+    infinite alternate;
+}
+
+.coach-voice-wave i:nth-child(2) {
+  animation-delay: 80ms;
+}
+
+.coach-voice-wave i:nth-child(3) {
+  animation-delay: 160ms;
+}
+
+.coach-voice-wave i:nth-child(4) {
+  animation-delay: 240ms;
+}
+
+.coach-voice-wave i:nth-child(5) {
+  animation-delay: 320ms;
+}
+
+.coach-stage-expressive {
+  position: relative;
+  isolation: isolate;
+}
+
+.coach-beat-hidden {
+  opacity: 0.12 !important;
+  filter: blur(1px);
+  transform:
+    translateY(12px)
+    scale(0.94) !important;
+  animation: none !important;
+}
+
+.coach-beat-revealed {
+  opacity: 1 !important;
+  filter: none;
+}
+
+.coach-beat-current {
+  z-index: 3;
+  animation:
+    coachReasoningBeat 620ms
+    cubic-bezier(.2,.9,.25,1.2)
+    both !important;
+  box-shadow:
+    0 16px 44px
+    rgba(158,119,255,0.2);
+}
+
+.coach-arrow-live {
+  opacity: 1 !important;
+  animation:
+    coachArrowTravel 680ms
+    ease-in-out
+    infinite alternate !important;
+}
+
+.coach-array-box {
+  overflow: visible;
+}
+
+.coach-array-scan {
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.coach-array-box-focus-live {
+  z-index: 5;
+  transform:
+    translateY(-13px)
+    scale(1.1) !important;
+  border-color:
+    #d2c3ff !important;
+  box-shadow:
+    0 0 0 7px rgba(158,119,255,0.1),
+    0 18px 48px rgba(116,83,255,0.38) !important;
+  animation:
+    coachFocusThump 720ms
+    cubic-bezier(.2,.9,.25,1.15)
+    both !important;
+}
+
+.coach-array-box-focus-live
+.coach-array-scan {
+  opacity: 1;
+  animation:
+    coachCellSweep 850ms
+    ease-in-out
+    infinite;
+}
+
+.coach-pointer-live {
+  color: #efe9ff;
+  transform: translateY(-4px);
+  filter:
+    drop-shadow(
+      0 0 8px
+      rgba(158,119,255,0.65)
+    );
+}
+
+.coach-pointer-live
+.coach-pointer-arrow {
+  animation:
+    coachPointerPunch 420ms
+    ease-in-out
+    infinite alternate;
+}
+
+.coach-hash-row {
+  transition:
+    transform 260ms ease,
+    background 260ms ease,
+    box-shadow 260ms ease;
+}
+
+.coach-hash-row-live {
+  z-index: 2;
+  transform:
+    translateX(10px)
+    scale(1.025);
+  background:
+    linear-gradient(
+      90deg,
+      rgba(158,119,255,0.2),
+      rgba(158,119,255,0.06)
+    );
+  box-shadow:
+    0 12px 30px
+    rgba(116,83,255,0.14);
+}
+
+.coach-hash-row-live
+.coach-hash-connector {
+  color: #c9b3ff;
+  opacity: 1;
+  animation:
+    coachHashArrow 430ms
+    ease-in-out
+    infinite alternate;
+}
+
+.coach-stack-box {
+  transition:
+    transform 260ms ease,
+    background 260ms ease,
+    border-color 260ms ease,
+    box-shadow 260ms ease;
+}
+
+.coach-stack-box-live {
+  transform:
+    translateX(10px)
+    scale(1.06);
+  background:
+    rgba(158,119,255,0.26);
+  border-color:
+    #b89cff;
+  box-shadow:
+    0 12px 32px
+    rgba(116,83,255,0.22);
+  animation:
+    coachStackBounce 620ms
+    cubic-bezier(.2,.9,.25,1.2)
+    both !important;
+}
+
+.coach-code-line-live {
+  position: relative;
+  z-index: 4;
+  transform: translateX(7px);
+  background:
+    linear-gradient(
+      90deg,
+      rgba(158,119,255,0.25),
+      rgba(158,119,255,0.04)
+    );
+  box-shadow:
+    inset 3px 0 0
+    #a98aff;
+  transition:
+    transform 220ms ease,
+    background 220ms ease;
+}
+
+.coach-code-line-live::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      90deg,
+      transparent,
+      rgba(255,255,255,0.12),
+      transparent
+    );
+  transform: translateX(-110%);
+  animation:
+    coachCodeSweep 600ms
+    ease-out
+    both;
+}
+
+.coach-complexity-before-live {
+  animation:
+    coachComplexityShake 520ms
+    ease-in-out
+    both;
+}
+
+.coach-complexity-arrow-live {
+  color: #d2c4ff;
+  animation:
+    coachComplexityArrow 520ms
+    ease-in-out
+    infinite alternate;
+}
+
+.coach-complexity-after-live {
+  animation:
+    coachComplexityWin 700ms
+    cubic-bezier(.2,.9,.25,1.2)
+    both;
+  box-shadow:
+    0 18px 48px
+    rgba(69,227,138,0.18);
+}
+
+.coach-operation-banner {
+  transition:
+    transform 240ms ease,
+    box-shadow 240ms ease,
+    border-color 240ms ease;
+}
+
+.coach-operation-live {
+  transform: translateY(-3px);
+  border-color:
+    rgba(193,169,255,0.48);
+  box-shadow:
+    0 14px 36px
+    rgba(116,83,255,0.2);
+}
+
+.coach-operation-live
+.coach-operation-icon {
+  animation:
+    coachOperationZap 520ms
+    ease-in-out
+    infinite alternate;
+}
+
+.coach-takeaway-expressive {
+  position: relative;
+  overflow: visible;
+  transition:
+    transform 300ms ease,
+    box-shadow 300ms ease;
+}
+
+.coach-takeaway-live {
+  transform: scale(1.035);
+  box-shadow:
+    0 24px 60px
+    rgba(69,227,138,0.18);
+}
+
+.coach-takeaway-live
+.coach-check {
+  animation:
+    coachCheckVictory 700ms
+    cubic-bezier(.2,.9,.25,1.3)
+    both;
+}
+
+.coach-confetti {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.coach-confetti span {
+  --angle:
+    calc(
+      var(--spark) *
+      36deg
+    );
+
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background:
+    hsl(
+      calc(
+        245 +
+        var(--spark) *
+        8
+      ),
+      90%,
+      72%
+    );
+  opacity: 0;
+}
+
+.coach-takeaway-live
+.coach-confetti span {
+  animation:
+    coachConfettiBurst
+    900ms
+    calc(
+      var(--spark) *
+      24ms
+    )
+    cubic-bezier(.1,.8,.2,1)
+    both;
+}
+
+@keyframes coachAvatarTalk {
+  from {
+    transform:
+      translateY(0)
+      rotate(-2deg)
+      scale(1);
+  }
+
+  to {
+    transform:
+      translateY(-4px)
+      rotate(2deg)
+      scale(1.05);
+  }
+}
+
+@keyframes coachVoiceBar {
+  from {
+    height: 4px;
+    opacity: 0.45;
+  }
+
+  to {
+    height: 14px;
+    opacity: 1;
+  }
+}
+
+@keyframes coachReasoningBeat {
+  0% {
+    transform:
+      translateY(12px)
+      scale(0.94);
+  }
+
+  65% {
+    transform:
+      translateY(-8px)
+      scale(1.06);
+  }
+
+  100% {
+    transform:
+      translateY(-3px)
+      scale(1.025);
+  }
+}
+
+@keyframes coachArrowTravel {
+  from {
+    transform:
+      translateX(-3px)
+      scale(0.9);
+  }
+
+  to {
+    transform:
+      translateX(5px)
+      scale(1.15);
+  }
+}
+
+@keyframes coachFocusThump {
+  0% {
+    transform:
+      translateY(-2px)
+      scale(0.96);
+  }
+
+  65% {
+    transform:
+      translateY(-16px)
+      scale(1.14);
+  }
+
+  100% {
+    transform:
+      translateY(-13px)
+      scale(1.1);
+  }
+}
+
+@keyframes coachCellSweep {
+  0% {
+    box-shadow:
+      inset 0 0 0
+      0 rgba(255,255,255,0);
+  }
+
+  45% {
+    box-shadow:
+      inset 0 0 22px
+      2px rgba(255,255,255,0.2);
+  }
+
+  100% {
+    box-shadow:
+      inset 0 0 0
+      0 rgba(255,255,255,0);
+  }
+}
+
+@keyframes coachPointerPunch {
+  from {
+    transform:
+      translateY(-2px)
+      scale(0.92);
+  }
+
+  to {
+    transform:
+      translateY(4px)
+      scale(1.18);
+  }
+}
+
+@keyframes coachHashArrow {
+  from {
+    transform:
+      translateX(-3px)
+      scale(0.9);
+  }
+
+  to {
+    transform:
+      translateX(4px)
+      scale(1.2);
+  }
+}
+
+@keyframes coachStackBounce {
+  0% {
+    transform:
+      translateY(-22px)
+      scale(0.9);
+  }
+
+  65% {
+    transform:
+      translateY(5px)
+      scale(1.08);
+  }
+
+  100% {
+    transform:
+      translateX(10px)
+      scale(1.06);
+  }
+}
+
+@keyframes coachCodeSweep {
+  to {
+    transform:
+      translateX(110%);
+  }
+}
+
+@keyframes coachComplexityShake {
+  0%,
+  100% {
+    transform: rotate(0);
+  }
+
+  25% {
+    transform:
+      rotate(-2deg)
+      scale(1.02);
+  }
+
+  75% {
+    transform:
+      rotate(2deg)
+      scale(1.02);
+  }
+}
+
+@keyframes coachComplexityArrow {
+  from {
+    transform:
+      translateX(-4px)
+      scale(0.9);
+  }
+
+  to {
+    transform:
+      translateX(6px)
+      scale(1.2);
+  }
+}
+
+@keyframes coachComplexityWin {
+  0% {
+    opacity: 0.45;
+    transform:
+      scale(0.88);
+  }
+
+  70% {
+    opacity: 1;
+    transform:
+      scale(1.08);
+  }
+
+  100% {
+    opacity: 1;
+    transform:
+      scale(1.03);
+  }
+}
+
+@keyframes coachOperationZap {
+  from {
+    transform:
+      rotate(-6deg)
+      scale(0.95);
+  }
+
+  to {
+    transform:
+      rotate(6deg)
+      scale(1.12);
+  }
+}
+
+@keyframes coachCheckVictory {
+  0% {
+    transform:
+      scale(0.4)
+      rotate(-18deg);
+  }
+
+  70% {
+    transform:
+      scale(1.25)
+      rotate(5deg);
+  }
+
+  100% {
+    transform:
+      scale(1)
+      rotate(0);
+  }
+}
+
+@keyframes coachConfettiBurst {
+  0% {
+    opacity: 0;
+    transform:
+      translate(-50%,-50%)
+      rotate(var(--angle))
+      translateX(0)
+      scale(0.4);
+  }
+
+  20% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+    transform:
+      translate(-50%,-50%)
+      rotate(var(--angle))
+      translateX(145px)
+      rotate(180deg)
+      scale(1);
+  }
+}
+
+@media (
+  prefers-reduced-motion:
+    reduce
+) {
+  .ai-avatar-speaking,
+  .coach-voice-wave i,
+  .coach-beat-current,
+  .coach-arrow-live,
+  .coach-array-box-focus-live,
+  .coach-pointer-live
+  .coach-pointer-arrow,
+  .coach-hash-row-live
+  .coach-hash-connector,
+  .coach-stack-box-live,
+  .coach-code-line-live::after,
+  .coach-complexity-before-live,
+  .coach-complexity-arrow-live,
+  .coach-complexity-after-live,
+  .coach-operation-live
+  .coach-operation-icon,
+  .coach-takeaway-live
+  .coach-check,
+  .coach-takeaway-live
+  .coach-confetti span {
+    animation: none !important;
+  }
+}

@@ -1,79 +1,180 @@
-import { mutation, query } from "./_generated/server";
-import { v } from "convex/values";
+import {
+  mutation,
+  query,
+} from "./_generated/server";
 
-export const joinRoom = mutation({
-  args: {
-    roomCode: v.string(),
-    name: v.string(),
-  },
+import {
+  v,
+} from "convex/values";
 
-  handler: async (ctx, args) => {
-    const room = await ctx.db
-      .query("rooms")
-      .withIndex("by_code", (q) =>
-        q.eq("code", args.roomCode)
-      )
-      .unique();
+export const joinRoom =
+  mutation({
+    args: {
+      roomCode:
+        v.string(),
 
-    if (!room) {
-      throw new Error("Room not found");
-    }
+      name:
+        v.string(),
+    },
 
-  const playerId = await ctx.db.insert("players", {
-  roomId: room._id,
-  name: args.name,
-  score: 0,
-  connected: true,
-  createdAt: Date.now(),
+    handler: async (
+      ctx,
+      args
+    ) => {
+      const room =
+        await ctx.db
+          .query("rooms")
+          .withIndex(
+            "by_code",
+            (q) =>
+              q.eq(
+                "code",
+                args.roomCode
+              )
+          )
+          .unique();
 
-  fiftyFifty: 0,
-  lagSpike: 1,
-  firewall: 1,
+      if (!room) {
+        throw new Error(
+          "Room not found"
+        );
+      }
 
-  timePenalty: 0,
-  firewallActive: false,
-});
+      const cleanName =
+        args.name.trim();
 
-    return {
-      playerId,
-      roomId: room._id,
-    };
-  },
-});
+      if (
+        cleanName.length ===
+        0
+      ) {
+        throw new Error(
+          "Name is required"
+        );
+      }
 
-export const getPlayersByRoom = query({
-  args: {
-    roomId: v.id("rooms"),
-  },
+      const playerId =
+        await ctx.db.insert(
+          "players",
+          {
+            roomId:
+              room._id,
 
-  handler: async (ctx, args) => {
-    return await ctx.db
-      .query("players")
-      .withIndex("by_room", (q) =>
-        q.eq("roomId", args.roomId)
-      )
-      .collect();
-  },
-});
+            name:
+              cleanName,
 
-export const resetRoundEffects = mutation({
-  args: {
-    roomId: v.id("rooms"),
-  },
+            score: 0,
 
-  handler: async (ctx, args) => {
-    const players = await ctx.db
-      .query("players")
-      .withIndex("by_room", (q) =>
-        q.eq("roomId", args.roomId)
-      )
-      .collect();
+            connected:
+              true,
 
-    for (const player of players) {
-      await ctx.db.patch(player._id, {
-        timePenalty: 0,
-        firewallActive: false,
-      });
-    }
-  },
-});
+            createdAt:
+              Date.now(),
+
+            fiftyFifty: 0,
+
+            lagSpike: 1,
+
+            firewall: 1,
+
+            timePenalty: 0,
+
+            firewallActive:
+              false,
+
+            fiftyFiftyActive:
+              false,
+
+            firewallBlockedThisRound:
+              false,
+
+            effectsRound: 0,
+
+            lastLagRewardRound:
+              0,
+          }
+        );
+
+      return {
+        playerId,
+        roomId:
+          room._id,
+      };
+    },
+  });
+
+export const getPlayersByRoom =
+  query({
+    args: {
+      roomId:
+        v.id("rooms"),
+    },
+
+    handler: async (
+      ctx,
+      args
+    ) => {
+      return await ctx.db
+        .query("players")
+        .withIndex(
+          "by_room",
+          (q) =>
+            q.eq(
+              "roomId",
+              args.roomId
+            )
+        )
+        .collect();
+    },
+  });
+
+/*
+  Kept for compatibility with older host code.
+  New round flow should prefer:
+  powerups.applyQueuedForRound.
+*/
+export const resetRoundEffects =
+  mutation({
+    args: {
+      roomId:
+        v.id("rooms"),
+    },
+
+    handler: async (
+      ctx,
+      args
+    ) => {
+      const players =
+        await ctx.db
+          .query("players")
+          .withIndex(
+            "by_room",
+            (q) =>
+              q.eq(
+                "roomId",
+                args.roomId
+              )
+          )
+          .collect();
+
+      for (
+        const player of
+        players
+      ) {
+        await ctx.db.patch(
+          player._id,
+          {
+            timePenalty: 0,
+
+            firewallActive:
+              false,
+
+            fiftyFiftyActive:
+              false,
+
+            firewallBlockedThisRound:
+              false,
+          }
+        );
+      }
+    },
+  });

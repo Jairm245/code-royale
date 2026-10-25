@@ -92,12 +92,35 @@ function PlayerGamePage() {
       | "powerup"
     >("powerup");
 
+
+  const [
+    queuedFirewall,
+    setQueuedFirewall,
+  ] =
+    useState(false);
+
+
   /*
     Used to detect when this player
     receives a new Lag Spike.
   */
   const previousPenaltyRef =
     useRef(0);
+
+  /*
+    Detect newly earned Lag Spikes without
+    firing an alert for the initial inventory.
+  */
+  const previousLagInventoryRef =
+    useRef<number | null>(
+      null
+    );
+
+  const applyingEffectsRoundRef =
+    useRef<number | null>(
+      null
+    );
+
 
   /*
     After a finished game, keep the player on
@@ -275,6 +298,13 @@ function PlayerGamePage() {
         .useLagSpike
     );
 
+  const applyQueuedForRound =
+    useMutation(
+      (api as any)
+        .powerups
+        .applyQueuedForRound
+    );
+
   /*
     TIMER
   */
@@ -294,14 +324,97 @@ function PlayerGamePage() {
     );
 
   /*
+    GUARANTEE NEXT-ROUND POWERUPS APPLY
+
+    The host normally applies queued effects
+    before starting the next question. This
+    player-side check is a safety net so a
+    Lag Spike / Firewall / 50-50 cannot be
+    missed because of a transition race.
+
+    applyQueuedForRound is idempotent, so it
+    is safe if the host already applied it.
+  */
+  useEffect(() => {
+    if (
+      !room ||
+      !currentPlayer ||
+      room.status !==
+        "playing" ||
+      room.currentRound <= 1
+    ) {
+      return;
+    }
+
+    if (
+      (currentPlayer
+        .effectsRound ??
+        0) ===
+      room.currentRound
+    ) {
+      applyingEffectsRoundRef.current =
+        null;
+
+      return;
+    }
+
+    if (
+      applyingEffectsRoundRef.current ===
+      room.currentRound
+    ) {
+      return;
+    }
+
+    applyingEffectsRoundRef.current =
+      room.currentRound;
+
+    void applyQueuedForRound({
+      roomId:
+        room._id,
+
+      round:
+        room.currentRound,
+    }).catch(
+      (error) => {
+        console.error(
+          "Failed to apply queued powerups:",
+          error
+        );
+
+        applyingEffectsRoundRef.current =
+          null;
+      }
+    );
+  }, [
+    room?._id,
+    room?.status,
+    room?.currentRound,
+    currentPlayer
+      ?.effectsRound,
+    applyQueuedForRound,
+  ]);
+
+  /*
     RESET NEW ROUND
   */
 
   useEffect(() => {
-    setSelectedAnswer(null);
-    
-    setHiddenAnswers([]);
-    setPowerUpMessage("");
+    setSelectedAnswer(
+      null
+    );
+
+    setHiddenAnswers(
+      []
+    );
+
+    setPowerUpMessage(
+      ""
+    );
+
+
+    setQueuedFirewall(
+      false
+    );
 
     previousPenaltyRef.current =
       0;
@@ -310,11 +423,16 @@ function PlayerGamePage() {
   ]);
 
   /*
-    DETECT INCOMING LAG SPIKE
+    APPLY LOCAL UI FOR NEXT-ROUND EFFECTS
   */
 
   useEffect(() => {
-    if (!currentPlayer) {
+    if (
+      !currentPlayer ||
+      !room ||
+      room.status !==
+        "playing"
+    ) {
       return;
     }
 
@@ -322,7 +440,22 @@ function PlayerGamePage() {
       currentPlayer.timePenalty ??
       0;
 
-    if (
+    const blocked =
+      currentPlayer
+        .firewallBlockedThisRound ??
+      false;
+
+    if (blocked) {
+      setAlertType(
+        "shield"
+      );
+
+      setPowerUpMessage(
+        penalty > 0
+          ? `🛡️ Firewall blocked one Lag Spike. Other attacks still cost ${penalty}s.`
+          : "🛡️ Firewall blocked a Lag Spike!"
+      );
+    } else if (
       penalty >
       previousPenaltyRef.current
     ) {
@@ -335,14 +468,65 @@ function PlayerGamePage() {
       );
 
       setPowerUpMessage(
-        `⚡ LAG SPIKE! -${difference} seconds`
+        `⚡ LAG SPIKE! -${difference} seconds this round`
       );
     }
 
     previousPenaltyRef.current =
       penalty;
   }, [
-    currentPlayer?.timePenalty,
+    room?.currentRound,
+    room?.status,
+    currentPlayer
+      ?.timePenalty,
+    currentPlayer
+      ?.firewallBlockedThisRound,
+  ]);
+
+  /*
+    Notify the player when a milestone
+    awards another Lag Spike.
+  */
+  useEffect(() => {
+    if (!currentPlayer) {
+      return;
+    }
+
+    const currentCount =
+      currentPlayer.lagSpike ??
+      0;
+
+    if (
+      previousLagInventoryRef.current ===
+      null
+    ) {
+      previousLagInventoryRef.current =
+        currentCount;
+
+      return;
+    }
+
+    if (
+      currentCount >
+        previousLagInventoryRef.current &&
+      room?.status ===
+        "results"
+    ) {
+      setAlertType(
+        "powerup"
+      );
+
+      setPowerUpMessage(
+        "⚡ Lag Spike earned! 3-streak or 5-correct milestone reached."
+      );
+    }
+
+    previousLagInventoryRef.current =
+      currentCount;
+  }, [
+    currentPlayer
+      ?.lagSpike,
+    room?.status,
   ]);
 
   /*
@@ -478,24 +662,20 @@ function PlayerGamePage() {
     }
 
     if (
-      selectedAnswer !== null ||
-      secondsRemaining <= 0
-    ) {
-      return;
-    }
-
-    if (
+      selectedAnswer !==
+        null ||
+      secondsRemaining <=
+        0 ||
+      hiddenAnswers.length >
+        0 ||
       (currentPlayer
         .fiftyFifty ??
-        0) <= 0
-    ) {
-      return;
-    }
-
-    if (
+        0) <= 0 ||
       room.correctAnswer ===
         undefined ||
-      !room.choices
+      !Array.isArray(
+        room.choices
+      )
     ) {
       return;
     }
@@ -507,7 +687,7 @@ function PlayerGamePage() {
       room.choices
         .map(
           (
-            _,
+            _choice,
             index
           ) => index
         )
@@ -546,7 +726,7 @@ function PlayerGamePage() {
       );
 
       setPowerUpMessage(
-        "🔥 50/50 activated!"
+        "✂️ 50 / 50 activated! Two wrong answers removed."
       );
     } catch (error) {
       console.error(
@@ -561,18 +741,21 @@ function PlayerGamePage() {
   */
 
   async function handleFirewall() {
-    if (!currentPlayer) {
-      return;
-    }
-
     if (
-      selectedAnswer !== null ||
-      secondsRemaining <= 0
+      !room ||
+      !currentPlayer
     ) {
       return;
     }
 
     if (
+      room.currentRound >=
+        10 ||
+      queuedFirewall ||
+      selectedAnswer !==
+        null ||
+      secondsRemaining <=
+        0 ||
       (currentPlayer
         .firewall ??
         0) <= 0
@@ -580,25 +763,27 @@ function PlayerGamePage() {
       return;
     }
 
-    if (
-      currentPlayer
-        .firewallActive
-    ) {
-      return;
-    }
-
     try {
-      await activateFirewall({
-        playerId:
-          currentPlayer._id,
-      });
+      const response =
+        await activateFirewall({
+          playerId:
+            currentPlayer._id,
+        });
+
+      setQueuedFirewall(
+        true
+      );
 
       setAlertType(
         "shield"
       );
 
       setPowerUpMessage(
-        "🛡️ Firewall activated!"
+        `🛡️ Firewall queued for Round ${
+          response
+            ?.queuedForRound ??
+          room.currentRound + 1
+        }`
       );
     } catch (error) {
       console.error(
@@ -619,7 +804,10 @@ function PlayerGamePage() {
     targetName:
       string
   ) {
-    if (!currentPlayer) {
+    if (
+      !room ||
+      !currentPlayer
+    ) {
       return;
     }
 
@@ -631,13 +819,12 @@ function PlayerGamePage() {
     }
 
     if (
-      selectedAnswer !== null ||
-      secondsRemaining <= 0
-    ) {
-      return;
-    }
-
-    if (
+      room.currentRound >=
+        10 ||
+      selectedAnswer !==
+        null ||
+      secondsRemaining <=
+        0 ||
       (currentPlayer
         .lagSpike ??
         0) <= 0
@@ -654,25 +841,17 @@ function PlayerGamePage() {
           targetId,
         });
 
-      if (
-        response.blocked
-      ) {
-        setAlertType(
-          "shield"
-        );
+      setAlertType(
+        "danger"
+      );
 
-        setPowerUpMessage(
-          `🛡️ ${targetName}'s Firewall blocked you!`
-        );
-      } else {
-        setAlertType(
-          "danger"
-        );
-
-        setPowerUpMessage(
-          `⚡ ${targetName} got Lag Spiked!`
-        );
-      }
+      setPowerUpMessage(
+        `⚡ Lag Spike queued against ${targetName} for Round ${
+          response
+            ?.queuedForRound ??
+          room.currentRound + 1
+        }`
+      );
     } catch (error) {
       console.error(
         "Lag Spike failed:",
@@ -1237,6 +1416,15 @@ function PlayerGamePage() {
           </div>
         </div>
 
+        {room.currentRound >=
+          10 && (
+          <div className="firewall-active-banner">
+            🏁 FINAL ROUND ·
+            Lag Spike and Firewall
+            cannot be queued
+          </div>
+        )}
+
         <div className="ability-grid">
           <button
             className="ability-card ability-comeback"
@@ -1265,7 +1453,7 @@ function PlayerGamePage() {
 
             <span>
               Remove 2 wrong
-              answers
+              answers now
             </span>
 
             <div className="ability-count">
@@ -1284,12 +1472,12 @@ function PlayerGamePage() {
               handleFirewall
             }
             disabled={
+              room.currentRound >=
+                10 ||
+              queuedFirewall ||
               (currentPlayer
                 .firewall ??
                 0) <= 0 ||
-              currentPlayer
-                .firewallActive ===
-                true ||
               selectedAnswer !==
                 null ||
               secondsRemaining <=
@@ -1305,7 +1493,8 @@ function PlayerGamePage() {
             </strong>
 
             <span>
-              Block one attack
+              Next round: block
+              one attack
             </span>
 
             <div className="ability-count">
@@ -1361,6 +1550,8 @@ function PlayerGamePage() {
                       )
                     }
                     disabled={
+                      room.currentRound >=
+                        10 ||
                       selectedAnswer !==
                         null ||
                       secondsRemaining <=
@@ -1380,9 +1571,8 @@ function PlayerGamePage() {
                       </strong>
 
                       <small>
-                        {
-                          player.name
-                        }
+                        {player.name} ·
+                        next round -5s
                       </small>
                     </div>
 

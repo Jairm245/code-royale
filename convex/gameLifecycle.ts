@@ -109,6 +109,17 @@ export const resetGame =
 
             firewallActive:
               false,
+
+            fiftyFiftyActive:
+              false,
+
+            firewallBlockedThisRound:
+              false,
+
+            effectsRound: 0,
+
+            lastLagRewardRound:
+              0,
           }
         );
       }
@@ -149,6 +160,27 @@ export const resetGame =
         ) {
           await ctx.db.delete(
             event._id
+          );
+        }
+      }
+
+      const queuedPowerups =
+        await ctx.db
+          .query(
+            "powerupQueue"
+          )
+          .collect();
+
+      for (
+        const queued of
+        queuedPowerups
+      ) {
+        if (
+          queued.roomId ===
+          args.roomId
+        ) {
+          await ctx.db.delete(
+            queued._id
           );
         }
       }

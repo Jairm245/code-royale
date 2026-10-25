@@ -36,6 +36,11 @@ import {
 } from "../utils/voice";
 
 import {
+  playStreamingVoice,
+  stopGeneratedVoice,
+} from "../utils/generatedVoice";
+
+import {
   playSfx,
 } from "../utils/sfx";
 
@@ -87,6 +92,7 @@ type ExplanationScene = {
   takeaway?: string;
 
   visual?: SceneVisual;
+  narration?: string;
 };
 
 type GeneratedExplanation = {
@@ -94,6 +100,7 @@ type GeneratedExplanation = {
   steps: string[];
   scenes: ExplanationScene[];
 };
+
 
 type PowerupType =
   | "lag"
@@ -214,6 +221,7 @@ function HostGamePage() {
     } | null>(
       null
     );
+
 
   const lastCountdownSoundRef =
     useRef<
@@ -395,10 +403,18 @@ const powerupEvents =
         .setExplanation
     );
 
-  const resetRoundEffects =
+  const applyQueuedForRound =
     useMutation(
-      api.players
-        .resetRoundEffects
+      (api as any)
+        .powerups
+        .applyQueuedForRound
+    );
+
+  const awardLagSpikeMilestones =
+    useMutation(
+      (api as any)
+        .powerups
+        .awardLagSpikeMilestones
     );
 
   const finishGame =
@@ -431,6 +447,7 @@ const powerupEvents =
         .aiExplanation
         .generateExplanation
     );
+
 
   /* ========================================
      TIMER
@@ -528,8 +545,15 @@ const powerupEvents =
             );
           }
 
-          await resetRoundEffects({
+          /*
+            Apply powerups that were queued
+            during the previous round BEFORE
+            the new question becomes active.
+          */
+          await applyQueuedForRound({
             roomId,
+            round:
+              nextRound,
           });
 
           await setGeneratedQuestion({
@@ -576,13 +600,17 @@ const powerupEvents =
       },
       [
         generateQuestion,
-        resetRoundEffects,
+        applyQueuedForRound,
         setGeneratedQuestion,
       ]
     );
 
   /* ========================================
      QUESTION NARRATION
+
+     Stream audio directly from OpenAI through
+     Convex HTTP instead of waiting for a full
+     generated file to be stored first.
   ======================================== */
 
   useEffect(() => {
@@ -608,25 +636,89 @@ const powerupEvents =
     const narration =
       `${category}. ${room.question}`;
 
+    let browserFallbackStarted =
+      false;
+
+    let cancelled =
+      false;
+
+    function startBrowserFallback() {
+      if (
+        cancelled ||
+        browserFallbackStarted
+      ) {
+        return;
+      }
+
+      browserFallbackStarted =
+        true;
+
+      speak(
+        narration,
+        {
+          rate:
+            1.04,
+
+          pitch:
+            1.0,
+        }
+      );
+    }
+
+    async function startQuestionVoice() {
+      try {
+        console.log(
+          "⚡ Starting streamed question voice"
+        );
+
+        await playStreamingVoice(
+          narration,
+          "question",
+          {
+            onError:
+              (
+                error
+              ) => {
+                console.warn(
+                  "Streamed question voice failed:",
+                  error
+                );
+
+                startBrowserFallback();
+              },
+          }
+        );
+      } catch (error) {
+        console.warn(
+          "Question voice stream failed. Using browser fallback:",
+          error
+        );
+
+        startBrowserFallback();
+      }
+    }
+
+    /*
+      Let the question card render first, then
+      begin streamed playback almost immediately.
+    */
     const timer =
       setTimeout(
         () => {
-          speak(
-            narration,
-            {
-              rate: 0.98,
-              pitch: 0.98,
-            }
-          );
+          void startQuestionVoice();
         },
-        500
+        80
       );
 
     return () => {
+      cancelled =
+        true;
+
       clearTimeout(
         timer
       );
 
+      stopGeneratedVoice();
       stopVoice();
     };
   }, [
@@ -967,7 +1059,7 @@ const powerupEvents =
           ],
         })
           .then(
-            (
+            async (
               generated
             ) => {
               const question:
@@ -1011,6 +1103,7 @@ const powerupEvents =
               console.log(
                 "✅ Next question prefetched"
               );
+
             }
           )
           .catch(
@@ -1126,15 +1219,52 @@ const powerupEvents =
       Date.now() >=
         room.questionEndsAt;
 
+    /*
+      A Lag Spike changes each player's
+      personal timer, not the host timer.
+
+      IMPORTANT:
+      Do NOT end the round because only one
+      player's personal timer reached zero.
+
+      This special early-end condition only
+      becomes true when EVERY player's
+      personal timer has reached zero.
+    */
+    const allPlayerTimersFinished =
+      players.length > 0 &&
+      players.every(
+        (player) => {
+          const penalty =
+            player.timePenalty ??
+            0;
+
+          const personalTime =
+            Math.max(
+              0,
+              secondsRemaining -
+                penalty
+            );
+
+          return (
+            personalTime <= 0
+          );
+        }
+      );
+
     if (
       !everyoneAnswered &&
-      !timerFinished
+      !timerFinished &&
+      !allPlayerTimersFinished
     ) {
       return;
     }
 
     endingRoundRef.current =
       true;
+
+    const currentRound =
+      room.currentRound;
 
     async function finishRound() {
       try {
@@ -1144,6 +1274,12 @@ const powerupEvents =
 
         await awardComeback({
           roomId,
+        });
+
+        await awardLagSpikeMilestones({
+          roomId,
+          round:
+            currentRound,
         });
       } catch (error) {
         console.error(
@@ -1164,6 +1300,7 @@ const powerupEvents =
     secondsRemaining,
     endRound,
     awardComeback,
+    awardLagSpikeMilestones,
   ]);
 
   /* ========================================
@@ -1449,6 +1586,7 @@ const powerupEvents =
       The animation will unmount once the
       next question becomes active.
     */
+    stopGeneratedVoice();
     stopVoice();
 
     const success =
@@ -1520,6 +1658,7 @@ const powerupEvents =
           "Generated replay question was invalid."
         );
       }
+
 
       prefetchedQuestionRef.current =
         null;
@@ -2201,15 +2340,15 @@ const powerupEvents =
             <small>
               {powerupBanner.type ===
                 "lag" &&
-                "Opponent loses 5 seconds"}
+                "Attack queued for next round"}
 
               {powerupBanner.type ===
                 "firewall" &&
-                "Protection activated"}
+                "Protection queued for next round"}
 
               {powerupBanner.type ===
                 "fifty" &&
-                "Two wrong answers eliminated"}
+                "Two wrong answers eliminated now"}
             </small>
           </div>
         </div>
@@ -2276,7 +2415,7 @@ const powerupEvents =
 
           <div className="host-question-card">
             <p className="host-eyebrow">
-              QUESTION
+              QUESTION · AI-GENERATED VOICE
             </p>
 
             <h1>

@@ -1,5 +1,3 @@
-"use node";
-
 import {
   action,
 } from "./_generated/server";
@@ -8,10 +6,834 @@ import {
   v,
 } from "convex/values";
 
-import OpenAI from "openai";
+/* ========================================
+   TYPES
+======================================== */
+
+type RawVisual = {
+  kind?: unknown;
+  values?: unknown;
+  activeIndices?: unknown;
+  pointers?: unknown;
+  entries?: unknown;
+  stack?: unknown;
+  operation?: unknown;
+  reasoningSteps?: unknown;
+};
+
+type RawScene = {
+  type?: unknown;
+  title?: unknown;
+  text?: unknown;
+  narration?: unknown;
+  code?: unknown;
+  highlightLine?: unknown;
+  highlightText?: unknown;
+  takeaway?: unknown;
+  visual?: unknown;
+};
+
+type RawExplanation = {
+  summary?: unknown;
+  steps?: unknown;
+  scenes?: unknown;
+};
+
+type SanitizedVisual = {
+  kind: string;
+  values?: string[];
+  activeIndices?: number[];
+  pointers?: Array<{
+    label: string;
+    index: number;
+  }>;
+  entries?: Array<{
+    key: string;
+    value: string;
+    active: boolean;
+  }>;
+  stack?: string[];
+  operation?: string;
+  reasoningSteps?: string[];
+};
+
+type SanitizedScene = {
+  type: string;
+  title: string;
+  text: string;
+  narration: string;
+  code?: string;
+  highlightLine?: number;
+  highlightText?: string;
+  takeaway?: string;
+  visual?: SanitizedVisual;
+};
+
+type SanitizedExplanation = {
+  summary: string;
+  steps: string[];
+  scenes: SanitizedScene[];
+};
 
 /* ========================================
-   GENERATE EXPLANATION
+   HELPERS
+======================================== */
+
+function asString(
+  value: unknown,
+  fallback = ""
+) {
+  return typeof value ===
+    "string"
+    ? value.trim()
+    : fallback;
+}
+
+function normalizeCode(
+  value: unknown
+) {
+  if (
+    typeof value !==
+    "string"
+  ) {
+    return undefined;
+  }
+
+  const normalized =
+    value
+      .replace(
+        /\\n/g,
+        "\n"
+      )
+      .trim();
+
+  return normalized.length >
+    0
+    ? normalized
+    : undefined;
+}
+
+function sanitizeStringArray(
+  value: unknown,
+  maxItems = 12
+) {
+  if (
+    !Array.isArray(
+      value
+    )
+  ) {
+    return undefined;
+  }
+
+  const items =
+    value
+      .slice(
+        0,
+        maxItems
+      )
+      .map(
+        (item) => {
+          if (
+            typeof item ===
+            "string"
+          ) {
+            return item;
+          }
+
+          if (
+            typeof item ===
+              "number" ||
+            typeof item ===
+              "boolean"
+          ) {
+            return String(
+              item
+            );
+          }
+
+          return "";
+        }
+      )
+      .filter(
+        (item) =>
+          item.length >
+          0
+      );
+
+  return items.length >
+    0
+    ? items
+    : undefined;
+}
+
+function sanitizeNumberArray(
+  value: unknown,
+  maxItems = 12
+) {
+  if (
+    !Array.isArray(
+      value
+    )
+  ) {
+    return undefined;
+  }
+
+  const items =
+    value
+      .slice(
+        0,
+        maxItems
+      )
+      .map(
+        (item) =>
+          typeof item ===
+            "number" &&
+          Number.isFinite(
+            item
+          )
+            ? Math.trunc(
+                item
+              )
+            : null
+      )
+      .filter(
+        (
+          item
+        ): item is number =>
+          item !== null
+      );
+
+  return items.length >
+    0
+    ? items
+    : undefined;
+}
+
+function sanitizePointers(
+  value: unknown
+) {
+  if (
+    !Array.isArray(
+      value
+    )
+  ) {
+    return undefined;
+  }
+
+  const pointers =
+    value
+      .slice(
+        0,
+        8
+      )
+      .map(
+        (item) => {
+          if (
+            !item ||
+            typeof item !==
+              "object"
+          ) {
+            return null;
+          }
+
+          const candidate =
+            item as Record<
+              string,
+              unknown
+            >;
+
+          const label =
+            asString(
+              candidate.label
+            );
+
+          const index =
+            candidate.index;
+
+          if (
+            !label ||
+            typeof index !==
+              "number" ||
+            !Number.isFinite(
+              index
+            )
+          ) {
+            return null;
+          }
+
+          return {
+            label,
+            index:
+              Math.trunc(
+                index
+              ),
+          };
+        }
+      )
+      .filter(
+        (
+          item
+        ): item is {
+          label: string;
+          index: number;
+        } =>
+          item !== null
+      );
+
+  return pointers.length >
+    0
+    ? pointers
+    : undefined;
+}
+
+function sanitizeEntries(
+  value: unknown
+) {
+  if (
+    !Array.isArray(
+      value
+    )
+  ) {
+    return undefined;
+  }
+
+  const entries =
+    value
+      .slice(
+        0,
+        10
+      )
+      .map(
+        (item) => {
+          if (
+            !item ||
+            typeof item !==
+              "object"
+          ) {
+            return null;
+          }
+
+          const candidate =
+            item as Record<
+              string,
+              unknown
+            >;
+
+          const key =
+            typeof candidate.key ===
+              "string" ||
+            typeof candidate.key ===
+              "number"
+              ? String(
+                  candidate.key
+                )
+              : "";
+
+          const entryValue =
+            typeof candidate.value ===
+              "string" ||
+            typeof candidate.value ===
+              "number"
+              ? String(
+                  candidate.value
+                )
+              : "";
+
+          if (
+            !key &&
+            !entryValue
+          ) {
+            return null;
+          }
+
+          return {
+            key,
+            value:
+              entryValue,
+            active:
+              candidate.active ===
+              true,
+          };
+        }
+      )
+      .filter(
+        (
+          item
+        ): item is {
+          key: string;
+          value: string;
+          active: boolean;
+        } =>
+          item !== null
+      );
+
+  return entries.length >
+    0
+    ? entries
+    : undefined;
+}
+
+function sanitizeVisual(
+  value: unknown
+):
+  | SanitizedVisual
+  | undefined {
+  if (
+    !value ||
+    typeof value !==
+      "object"
+  ) {
+    return undefined;
+  }
+
+  const raw =
+    value as RawVisual;
+
+  const allowedKinds =
+    new Set([
+      "reasoning",
+      "array",
+      "pointers",
+      "hashmap",
+      "stack",
+      "code",
+      "complexity",
+      "takeaway",
+    ]);
+
+  const rawKind =
+    asString(
+      raw.kind,
+      "reasoning"
+    );
+
+  const kind =
+    allowedKinds.has(
+      rawKind
+    )
+      ? rawKind
+      : "reasoning";
+
+  const visual:
+    SanitizedVisual = {
+      kind,
+    };
+
+  const values =
+    sanitizeStringArray(
+      raw.values
+    );
+
+  if (values) {
+    visual.values =
+      values;
+  }
+
+  const activeIndices =
+    sanitizeNumberArray(
+      raw.activeIndices
+    );
+
+  if (
+    activeIndices
+  ) {
+    visual.activeIndices =
+      activeIndices;
+  }
+
+  const pointers =
+    sanitizePointers(
+      raw.pointers
+    );
+
+  if (pointers) {
+    visual.pointers =
+      pointers;
+  }
+
+  const entries =
+    sanitizeEntries(
+      raw.entries
+    );
+
+  if (entries) {
+    visual.entries =
+      entries;
+  }
+
+  const stack =
+    sanitizeStringArray(
+      raw.stack
+    );
+
+  if (stack) {
+    visual.stack =
+      stack;
+  }
+
+  const operation =
+    asString(
+      raw.operation
+    );
+
+  if (operation) {
+    visual.operation =
+      operation;
+  }
+
+  const reasoningSteps =
+    sanitizeStringArray(
+      raw.reasoningSteps,
+      8
+    );
+
+  if (
+    reasoningSteps
+  ) {
+    visual.reasoningSteps =
+      reasoningSteps;
+  }
+
+  return visual;
+}
+
+function sanitizeScene(
+  value: unknown,
+  index: number,
+  questionType:
+    string | undefined,
+  codeSnippet:
+    string | undefined
+):
+  SanitizedScene | null {
+  if (
+    !value ||
+    typeof value !==
+      "object"
+  ) {
+    return null;
+  }
+
+  const raw =
+    value as RawScene;
+
+  const text =
+    asString(
+      raw.text
+    );
+
+  const narration =
+    asString(
+      raw.narration,
+      text
+    );
+
+  if (
+    !text &&
+    !narration
+  ) {
+    return null;
+  }
+
+  const scene:
+    SanitizedScene = {
+      type:
+        asString(
+          raw.type,
+          index === 0
+            ? "reasoning"
+            : "explanation"
+        ),
+
+      title:
+        asString(
+          raw.title,
+          index === 0
+            ? "Let's Break It Down"
+            : `Step ${
+                index + 1
+              }`
+        ),
+
+      text:
+        text ||
+        narration,
+
+      narration:
+        narration ||
+        text,
+    };
+
+  /*
+    For Bug Hunt questions, always prefer the
+    ORIGINAL source snippet so the AI cannot
+    accidentally rewrite the buggy code.
+  */
+  const rawCode =
+    questionType ===
+      "bug_hunt" &&
+    codeSnippet
+      ? codeSnippet
+      : normalizeCode(
+          raw.code
+        );
+
+  const code =
+    normalizeCode(
+      rawCode
+    );
+
+  if (code) {
+    scene.code =
+      code;
+  }
+
+  if (
+    typeof raw.highlightLine ===
+      "number" &&
+    Number.isFinite(
+      raw.highlightLine
+    )
+  ) {
+    scene.highlightLine =
+      Math.max(
+        1,
+        Math.trunc(
+          raw.highlightLine
+        )
+      );
+  }
+
+  const highlightText =
+    asString(
+      raw.highlightText
+    );
+
+  if (
+    highlightText
+  ) {
+    scene.highlightText =
+      highlightText;
+  }
+
+  const takeaway =
+    asString(
+      raw.takeaway
+    );
+
+  if (takeaway) {
+    scene.takeaway =
+      takeaway;
+  }
+
+  const visual =
+    sanitizeVisual(
+      raw.visual
+    );
+
+  if (visual) {
+    scene.visual =
+      visual;
+  }
+
+  return scene;
+}
+
+function sanitizeExplanation(
+  value: unknown,
+  questionType:
+    string | undefined,
+  codeSnippet:
+    string | undefined
+):
+  SanitizedExplanation {
+  const raw =
+    value &&
+    typeof value ===
+      "object"
+      ? (value as RawExplanation)
+      : {};
+
+  const summary =
+    asString(
+      raw.summary,
+      "Let's break down the correct reasoning."
+    );
+
+  const steps =
+    Array.isArray(
+      raw.steps
+    )
+      ? raw.steps
+          .slice(
+            0,
+            8
+          )
+          .map(
+            (step) =>
+              asString(
+                step
+              )
+          )
+          .filter(
+            Boolean
+          )
+      : [];
+
+  const rawScenes =
+    Array.isArray(
+      raw.scenes
+    )
+      ? raw.scenes
+      : [];
+
+  const scenes =
+    rawScenes
+      .slice(
+        0,
+        6
+      )
+      .map(
+        (
+          scene,
+          index
+        ) =>
+          sanitizeScene(
+            scene,
+            index,
+            questionType,
+            codeSnippet
+          )
+      )
+      .filter(
+        (
+          scene
+        ): scene is SanitizedScene =>
+          scene !== null
+      );
+
+  /*
+    Never return an empty scene list.
+    This keeps the AI Coach UI safe.
+  */
+  if (
+    scenes.length ===
+    0
+  ) {
+    scenes.push({
+      type:
+        "reasoning",
+
+      title:
+        "The Key Idea",
+
+      text:
+        summary,
+
+      narration:
+        summary,
+
+      visual: {
+        kind:
+          "reasoning",
+      },
+    });
+  }
+
+  return {
+    summary,
+    steps:
+      steps.length >
+      0
+        ? steps
+        : scenes.map(
+            (scene) =>
+              scene.text
+          ),
+    scenes,
+  };
+}
+
+function stripJsonFences(
+  value: string
+) {
+  return value
+    .replace(
+      /^```json\s*/i,
+      ""
+    )
+    .replace(
+      /^```\s*/i,
+      ""
+    )
+    .replace(
+      /\s*```$/,
+      ""
+    )
+    .trim();
+}
+
+function getQuestionTypeGuidance(
+  questionType?: string
+) {
+  switch (
+    questionType
+  ) {
+    case "data_structure":
+      return `
+DATA STRUCTURE FOCUS:
+- Explain why the chosen data structure fits the operations the problem needs.
+- Compare it briefly against the most tempting alternative.
+- Show the important state of the structure as the algorithm runs.
+- Prefer array, hashmap, stack, pointers, or reasoning visuals.`;
+
+    case "optimal_approach":
+      return `
+OPTIMAL APPROACH FOCUS:
+- Start with the tempting brute-force idea.
+- Explain exactly where it wastes work.
+- Show the observation that removes repeated work.
+- Connect that observation to the optimal algorithm.
+- Explain the time/space tradeoff clearly.`;
+
+    case "bug_hunt":
+      return `
+BUG HUNT FOCUS:
+- Use the ORIGINAL code exactly as provided.
+- Identify the real problematic line or operation.
+- Explain what the program does because of that bug.
+- Explain the conceptual fix.
+- Never silently rewrite the source code.
+- Use highlightLine/highlightText when possible.`;
+
+    case "complexity":
+      return `
+COMPLEXITY FOCUS:
+- Explain where every factor in the Big-O expression comes from.
+- Separate time complexity from space complexity.
+- Mention nested loops, repeated work, recursion depth, or data-structure operations when relevant.
+- Do not state Big-O without explaining why.`;
+
+    case "edge_case":
+      return `
+EDGE CASE FOCUS:
+- Give one concrete input/state that breaks the tempting solution.
+- Walk through exactly what happens on that input.
+- Explain what condition/check the correct solution needs.
+- Prefer array, pointers, code, or reasoning visuals.`;
+
+    default:
+      return `
+GENERAL FOCUS:
+- Explain the key observation.
+- Walk through the reasoning.
+- Explain why the correct answer beats the tempting alternatives.
+- End with a useful coding-interview takeaway.`;
+  }
+}
+
+/* ========================================
+   ACTION
 ======================================== */
 
 export const generateExplanation =
@@ -49,821 +871,465 @@ export const generateExplanation =
 
       if (!apiKey) {
         throw new Error(
-          "OPENAI_API_KEY is not configured."
+          "OPENAI_API_KEY is not configured in Convex."
         );
       }
 
-      const openai =
-        new OpenAI({
-          apiKey,
-        });
+      const safeCorrectIndex =
+        Number.isInteger(
+          args.correctAnswer
+        ) &&
+        args.correctAnswer >=
+          0 &&
+        args.correctAnswer <
+          args.choices.length
+          ? args.correctAnswer
+          : 0;
 
       const correctChoice =
         args.choices[
-          args.correctAnswer
-        ];
+          safeCorrectIndex
+        ] ??
+        "Unknown";
 
-      const isBugHunt =
-        args.questionType ===
-          "bug_hunt";
+      const sourceCode =
+        args.codeSnippet
+          ?.replace(
+            /\\n/g,
+            "\n"
+          )
+          .trim() ||
+        "";
 
-      /* ====================================
-         PROMPT
-      ==================================== */
+      const questionType =
+        args.questionType
+          ?.trim() ||
+        "general";
+
+      const typeGuidance =
+        getQuestionTypeGuidance(
+          questionType
+        );
 
       const prompt = `
-You are the animated AI Coach for Code Royale.
+You are the AI COACH and game-show host for a multiplayer coding interview game called CODE ROYALE.
 
-Code Royale is a multiplayer coding interview game.
+The players just missed this question. Your job is NOT to merely reveal the answer. Teach the reasoning an interviewer would want to hear while keeping the explanation energetic, visual, and concise enough for a game.
 
-Your job is to explain WHY the correct answer works
-using short animated scenes.
+QUESTION TYPE:
+${questionType}
 
-Question type:
-${args.questionType ?? "unknown"}
-
-Question:
+QUESTION:
 ${args.question}
 
-Choices:
-
+CHOICES:
 ${args.choices
   .map(
     (
       choice,
       index
     ) =>
-      `${index}: ${choice}`
+      `${index}. ${choice}`
   )
   .join("\n")}
 
-Correct answer:
+CORRECT ANSWER INDEX:
+${safeCorrectIndex}
 
+CORRECT ANSWER:
 ${correctChoice}
 
 ${
-  args.codeSnippet
-    ? `
-ORIGINAL CODE:
-
-${args.codeSnippet}
-`
-    : ""
+  sourceCode
+    ? `ORIGINAL CODE:
+${sourceCode}`
+    : "ORIGINAL CODE: None"
 }
 
-========================================
-GENERAL RULES
-========================================
+${typeGuidance}
 
-Create 4 to 6 scenes.
+VOICE / COACH PERSONALITY:
+- Sound like an energetic game-show host who is also an experienced software engineer.
+- Confident, conversational, and encouraging.
+- Never sound like a textbook or a robotic narrator.
+- Build a little suspense before the important reveal.
+- Occasionally address the group as "coders", but do not overuse it.
+- Use natural transitions such as:
+  "Here's the key..."
+  "Now watch what happens..."
+  "This is where the trap is..."
+  "The interviewer is really testing whether you notice..."
+- Do not insult players for missing the question.
+- Technical explanations must remain accurate.
 
-Every scene must teach ONE specific idea.
+MOST IMPORTANT RULE:
+Every scene has TWO different forms of explanation:
 
-Every scene MUST contain a visual.
+1. "text"
+   - What appears on the screen.
+   - Keep this SHORT: usually 1-2 sentences.
 
-Allowed visual kinds:
+2. "narration"
+   - What the AI game-show voice actually says.
+   - This MUST EXPAND on the screen text instead of reading it word-for-word.
+   - Explain WHY the answer works.
+   - Explain the reasoning process.
+   - Mention why a tempting wrong approach fails when useful.
+   - Walk through important state changes in code/data structures.
+   - Aim for roughly 35-75 spoken words per scene.
+   - Avoid repeating the same sentence from "text".
 
-- reasoning
-- array
+CREATE 4 TO 6 SCENES.
+
+A strong explanation usually follows this progression:
+1. Hook: what the question is really testing.
+2. Key observation: the insight needed to solve it.
+3. Walkthrough: trace the code/data structure/algorithm.
+4. Trap: why a tempting wrong answer fails.
+5. Complexity or tradeoff.
+6. Interview takeaway.
+
+You may adapt that structure when another sequence fits the question better.
+
+VISUAL RULES:
+EVERY scene MUST include exactly ONE "visual" object.
+Do NOT create text-only scenes.
+
+The visuals should meaningfully illustrate the explanation instead of acting as decoration.
+
+IMPORTANT VISUAL VARIETY:
+- Use at most TWO "reasoning" visuals in the entire explanation.
+- At least ONE middle scene MUST use a concrete animated visual when applicable:
+  "array", "pointers", "hashmap", "stack", or "code".
+- Use "complexity" for the complexity/tradeoff scene.
+- Use "takeaway" for the final interview-takeaway scene.
+- Prefer visuals that match the actual data structure or algorithm in the question.
+- Do not use "reasoning" for every scene.
+
+QUESTION-SPECIFIC VISUAL GUIDANCE:
+- data_structure: visualize the actual structure changing. Prefer "array", "hashmap", "stack", or "pointers".
+- optimal_approach: show the optimized structure/state and how it avoids repeated work.
+- bug_hunt: use "code" for the bug walkthrough and highlight the original faulty line. Never invent replacement source code.
+- complexity: include a "complexity" visual and show why the stated complexity follows from the operations.
+- edge_case: visualize the exact input/state that exposes the edge case.
+
+Allowed visual.kind values ONLY:
+- "reasoning"
+- "array"
+- "pointers"
+- "hashmap"
+- "stack"
+- "code"
+- "complexity"
+- "takeaway"
+
+Allowed visual fields ONLY:
+- kind
+- values
+- activeIndices
 - pointers
-- hashmap
+- entries
 - stack
-- code
-- complexity
-- takeaway
+- operation
+- reasoningSteps
 
-Keep:
+Visual shapes:
 
-- titles under about 7 words
-- explanation text under about 25 words
-- animations understandable on a shared screen
-
-Do NOT use vague filler.
-
-Never use generic reasoning such as:
-
-- Inspect
-- Reason
-- Decide
-- Think about it
-- Analyze the problem
-- Look closer
-
-Instead describe the ACTUAL reasoning.
-
-========================================
-REASONING SCENES
-========================================
-
-When visual.kind is "reasoning",
-you MUST provide reasoningSteps.
-
-reasoningSteps should contain 2 to 4 short,
-problem-specific reasoning steps.
-
-BAD:
-
+ARRAY:
 {
-  "reasoningSteps": [
-    "Inspect",
-    "Reason",
-    "Decide"
+  "kind": "array",
+  "values": ["2", "7", "11", "15"],
+  "activeIndices": [0, 1]
+}
+
+POINTERS:
+{
+  "kind": "pointers",
+  "values": ["1", "2", "3", "4"],
+  "pointers": [
+    {"label": "left", "index": 0},
+    {"label": "right", "index": 3}
   ]
 }
 
-GOOD DATA STRUCTURE EXAMPLE:
-
+HASHMAP:
 {
-  "type": "reasoning",
-  "title": "Why a hash map?",
-  "text": "We need fast lookup while scanning once.",
-  "visual": {
-    "kind": "reasoning",
-    "reasoningSteps": [
-      "Need to remember values already seen",
-      "Need fast complement lookup",
-      "Hash map lookup is O(1) average",
-      "One pass gives O(n)"
-    ],
-    "operation": "Choose Hash Map"
-  }
-}
-
-GOOD STACK EXAMPLE:
-
-{
-  "type": "reasoning",
-  "title": "Why a stack?",
-  "text": "The newest opening bracket must close first.",
-  "visual": {
-    "kind": "reasoning",
-    "reasoningSteps": [
-      "Opening bracket arrives",
-      "Push it onto the stack",
-      "Closing bracket checks the top",
-      "Last opened must close first"
-    ],
-    "operation": "LIFO matches the problem"
-  }
-}
-
-GOOD HEAP EXAMPLE:
-
-{
-  "type": "reasoning",
-  "title": "Why a heap?",
-  "text": "We repeatedly need the smallest remaining value.",
-  "visual": {
-    "kind": "reasoning",
-    "reasoningSteps": [
-      "Need repeated minimum retrieval",
-      "Scanning an array costs O(n)",
-      "Heap removal costs O(log n)",
-      "Use a min heap"
-    ],
-    "operation": "Efficient repeated minimum"
-  }
-}
-
-========================================
-ARRAY SCENES
-========================================
-
-Use actual values from the problem when possible.
-
-Example:
-
-{
-  "type": "reasoning",
-  "title": "Check the first value",
-  "text": "We need 7 to reach the target.",
-  "visual": {
-    "kind": "array",
-    "values": [
-      "2",
-      "7",
-      "11",
-      "15"
-    ],
-    "activeIndices": [
-      0
-    ],
-    "operation": "9 - 2 = 7"
-  }
-}
-
-========================================
-POINTER SCENES
-========================================
-
-Example:
-
-{
-  "type": "reasoning",
-  "title": "Move the pointers",
-  "text": "The current sum is too large.",
-  "visual": {
-    "kind": "pointers",
-    "values": [
-      "1",
-      "3",
-      "5",
-      "8"
-    ],
-    "activeIndices": [
-      0,
-      3
-    ],
-    "pointers": [
-      {
-        "label": "left",
-        "index": 0
-      },
-      {
-        "label": "right",
-        "index": 3
-      }
-    ],
-    "operation": "Compare 1 + 8"
-  }
-}
-
-========================================
-HASH MAP SCENES
-========================================
-
-Example:
-
-{
-  "type": "reasoning",
-  "title": "Store the value",
-  "text": "Remember values so complements can be found instantly.",
-  "visual": {
-    "kind": "hashmap",
-    "entries": [
-      {
-        "key": "2",
-        "value": "index 0",
-        "active": true
-      }
-    ],
-    "operation": "map[2] = 0"
-  }
-}
-
-========================================
-STACK SCENES
-========================================
-
-Example:
-
-{
-  "type": "reasoning",
-  "title": "Push the bracket",
-  "text": "Opening brackets wait for their matching close.",
-  "visual": {
-    "kind": "stack",
-    "stack": [
-      "(",
-      "["
-    ],
-    "operation": "Push ["
-  }
-}
-
-========================================
-BUG HUNT
-========================================
-
-${
-  isBugHunt
-    ? `
-THIS IS A BUG HUNT QUESTION.
-
-For code scenes:
-
-DO NOT guess line numbers.
-
-Instead return highlightText containing the exact
-source-code text that should be highlighted.
-
-Example:
-
-{
-  "type": "code",
-  "title": "Here's the bug",
-  "text": "Negative input never reaches the base case.",
-  "highlightText": "return n * factorial(n - 1)",
-  "visual": {
-    "kind": "code",
-    "operation": "Recursion continues forever"
-  }
-}
-
-Rules:
-
-- use the ORIGINAL CODE
-- do not rewrite the source
-- highlightText should match a real source line
-- ignore indentation when choosing highlightText
-- at least TWO scenes should use visual.kind = "code"
-- one code scene identifies the bug
-- another explains the consequence or fix
-`
-    : `
-For non-bug questions, use code scenes only when
-showing actual code materially improves the explanation.
-`
-}
-
-========================================
-COMPLEXITY
-========================================
-
-For complexity scenes:
-
-{
-  "type": "complexity",
-  "title": "Compare the runtime",
-  "text": "One pass avoids nested searching.",
-  "visual": {
-    "kind": "complexity",
-    "reasoningSteps": [
-      "Nested search checks many pairs",
-      "Hash lookup avoids inner scanning",
-      "Each element is processed once"
-    ],
-    "operation": "O(n²) → O(n)"
-  }
-}
-
-========================================
-FINAL TAKEAWAY
-========================================
-
-The final scene MUST use:
-
-{
-  "kind": "takeaway"
-}
-
-Example:
-
-{
-  "type": "takeaway",
-  "title": "Remember this",
-  "text": "Match the structure to the operation you need.",
-  "takeaway": "Fast lookup → think hash map",
-  "visual": {
-    "kind": "takeaway",
-    "operation": "Fast lookup → Hash Map"
-  }
-}
-
-========================================
-OUTPUT
-========================================
-
-Return JSON only.
-
-{
-  "summary": "short overall explanation",
-
-  "steps": [
-    "step one",
-    "step two"
+  "kind": "hashmap",
+  "entries": [
+    {"key": "2", "value": "0", "active": true},
+    {"key": "7", "value": "1", "active": false}
   ],
+  "operation": "Check whether target - current is already stored"
+}
 
+STACK:
+{
+  "kind": "stack",
+  "stack": ["(", "[", "{"],
+  "operation": "Pop when the closing bracket matches"
+}
+
+REASONING:
+{
+  "kind": "reasoning",
+  "reasoningSteps": [
+    "Identify the repeated work",
+    "Store what we already know",
+    "Reuse it in O(1) average time"
+  ]
+}
+
+COMPLEXITY:
+{
+  "kind": "complexity",
+  "reasoningSteps": [
+    "Visit each element once: O(n)",
+    "Hash lookup is O(1) average",
+    "Store up to n elements: O(n) space"
+  ]
+}
+
+TAKEAWAY:
+{
+  "kind": "takeaway",
+  "reasoningSteps": [
+    "State the brute-force option",
+    "Identify repeated work",
+    "Explain the optimized structure"
+  ]
+}
+
+CODE SCENES:
+- "code" must contain valid source code text when used.
+- "highlightLine" is 1-based.
+- "highlightText" should identify the important expression or statement.
+- For Bug Hunt questions, NEVER invent replacement code. Use the ORIGINAL code supplied above.
+- Preserve newlines in code.
+
+OUTPUT RULES:
+Return VALID JSON ONLY.
+No markdown fences.
+No commentary outside the JSON.
+
+Use exactly this top-level structure:
+
+{
+  "summary": "One concise sentence summarizing the main insight.",
+  "steps": [
+    "Short reasoning step 1",
+    "Short reasoning step 2",
+    "Short reasoning step 3"
+  ],
   "scenes": [
     {
       "type": "reasoning",
-      "title": "...",
-      "text": "...",
-
-      "highlightText": "...",
-
-      "takeaway": "...",
-
+      "title": "What They're Testing",
+      "text": "Short on-screen explanation.",
+      "narration": "Longer natural spoken explanation that teaches the reasoning instead of reading the text.",
       "visual": {
         "kind": "reasoning",
-
-        "values": [],
-
-        "activeIndices": [],
-
-        "pointers": [],
-
-        "entries": [],
-
-        "stack": [],
-
-        "operation": "...",
-
         "reasoningSteps": [
-          "...",
-          "...",
-          "..."
+          "Identify the goal",
+          "Spot the repeated work"
         ]
+      }
+    },
+    {
+      "type": "walkthrough",
+      "title": "Watch the State Change",
+      "text": "Show the important data structure state.",
+      "narration": "Walk through the changing state naturally and explain why this operation moves us toward the answer.",
+      "visual": {
+        "kind": "array",
+        "values": ["2", "7", "11", "15"],
+        "activeIndices": [0, 1],
+        "operation": "Compare the active values"
+      }
+    },
+    {
+      "type": "complexity",
+      "title": "Why It's Efficient",
+      "text": "Connect the operations to the runtime.",
+      "narration": "Explain the time and space complexity in interview terms.",
+      "visual": {
+        "kind": "complexity",
+        "reasoningSteps": [
+          "Visit each element once: O(n)",
+          "Each lookup is O(1) average",
+          "Store up to n values: O(n) space"
+        ]
+      }
+    },
+    {
+      "type": "takeaway",
+      "title": "Interview Takeaway",
+      "text": "End with the reusable interview insight.",
+      "narration": "Give a confident closing takeaway that the player can reuse in a real coding interview.",
+      "takeaway": "Choose the data structure that removes repeated work.",
+      "visual": {
+        "kind": "takeaway",
+        "operation": "Turn repeated searches into fast lookups"
       }
     }
   ]
 }
+
+SCENE FIELD RULES:
+Allowed scene fields ONLY:
+- type
+- title
+- text
+- narration
+- code
+- highlightLine
+- highlightText
+- takeaway
+- visual
+
+Do NOT return null.
+If a field is not needed, OMIT it entirely.
+Do NOT add fields not listed above.
+
+FINAL SCENE:
+The final scene should give one memorable interview takeaway.
+Its narration should sound like a confident closing from the Code Royale coach.
 `;
 
-      /* ====================================
-         OPENAI
-      ==================================== */
+      const response =
+        await fetch(
+          "https://api.openai.com/v1/chat/completions",
+          {
+            method:
+              "POST",
 
-      const completion =
-        await openai
-          .chat
-          .completions
-          .create({
-            model:
-              "gpt-4o-mini",
+            headers: {
+              Authorization:
+                `Bearer ${apiKey}`,
 
-            messages: [
-              {
-                role:
-                  "system",
-
-                content:
-                  `
-You are a concise visual coding tutor.
-
-Every explanation should visually demonstrate
-the actual algorithmic reasoning.
-
-Never use generic reasoning filler.
-
-Return valid JSON only.
-`,
-              },
-
-              {
-                role:
-                  "user",
-
-                content:
-                  prompt,
-              },
-            ],
-
-            response_format: {
-              type:
-                "json_object",
+              "Content-Type":
+                "application/json",
             },
 
-            temperature:
-              0.45,
+            body:
+              JSON.stringify({
+                model:
+                  "gpt-4o-mini",
 
-            max_tokens:
-              1400,
-          });
+                temperature:
+                  0.7,
+
+                response_format: {
+                  type:
+                    "json_object",
+                },
+
+                messages: [
+                  {
+                    role:
+                      "system",
+
+                    content:
+                      "You generate accurate, structured coding-interview explanations for Code Royale. Always return valid JSON and follow the requested schema exactly.",
+                  },
+                  {
+                    role:
+                      "user",
+
+                    content:
+                      prompt,
+                  },
+                ],
+              }),
+          }
+        );
+
+      if (!response.ok) {
+        const details =
+          await response
+            .text()
+            .catch(
+              () => ""
+            );
+
+        console.error(
+          "AI explanation request failed:",
+          response.status,
+          details
+        );
+
+        throw new Error(
+          "AI explanation generation failed."
+        );
+      }
+
+      const payload:
+        unknown =
+        await response.json();
+
+      if (
+        !payload ||
+        typeof payload !==
+          "object"
+      ) {
+        throw new Error(
+          "AI explanation returned an invalid response."
+        );
+      }
+
+      const data =
+        payload as {
+          choices?: Array<{
+            message?: {
+              content?: unknown;
+            };
+          }>;
+        };
 
       const content =
-        completion
-          .choices[0]
-          .message
-          .content;
+        data.choices?.[0]
+          ?.message
+          ?.content;
 
-      if (!content) {
+      if (
+        typeof content !==
+          "string" ||
+        content.trim()
+          .length === 0
+      ) {
         throw new Error(
-          "No explanation returned."
+          "AI explanation returned no content."
         );
       }
 
       let parsed:
-        any;
+        unknown;
 
       try {
         parsed =
           JSON.parse(
-            content
+            stripJsonFences(
+              content
+            )
           );
-      } catch {
-        throw new Error(
-          "Explanation was not valid JSON."
-        );
-      }
-
-      if (
-        typeof parsed.summary !==
-          "string" ||
-        !Array.isArray(
-          parsed.steps
-        ) ||
-        !Array.isArray(
-          parsed.scenes
-        )
+      } catch (
+        error
       ) {
+        console.error(
+          "Failed to parse AI explanation JSON:",
+          content,
+          error
+        );
+
         throw new Error(
-          "Invalid AI Coach explanation."
+          "AI explanation returned invalid JSON."
         );
       }
 
-      /* ====================================
-         NORMALIZE SCENES
-      ==================================== */
-
-      const scenes =
-        parsed.scenes.map(
-          (
-            scene:
-              any
-          ) => {
-            const visual =
-              scene.visual &&
-              typeof scene.visual ===
-                "object"
-                ? scene.visual
-                : {
-                    kind:
-                      scene.type ===
-                      "takeaway"
-                        ? "takeaway"
-                        : isBugHunt
-                          ? "code"
-                          : "reasoning",
-                  };
-                  /* =================================
-   NORMALIZE HIGHLIGHT TEXT LOCATION
-================================= */
-
-let normalizedHighlightText:
-  string | undefined;
-
-if (
-  typeof scene.highlightText ===
-  "string"
-) {
-  normalizedHighlightText =
-    scene.highlightText;
-} else if (
-  typeof visual.highlightText ===
-  "string"
-) {
-  normalizedHighlightText =
-    visual.highlightText;
-}
-
-/*
-  Convex visual validator does not
-  allow highlightText inside visual.
-*/
-if (
-  "highlightText" in visual
-) {
-  delete visual.highlightText;
-}
-                  if (
-  Array.isArray(
-    visual.values
-  )
-) {
-  visual.values =
-    visual.values.map(
-      (
-        value: unknown
-      ) =>
-        String(
-          value
-        )
-    );
-}
-
-            /* =================================
-               REASONING FALLBACK
-            ================================= */
-
-            if (
-              visual.kind ===
-                "reasoning"
-            ) {
-              if (
-                !Array.isArray(
-                  visual.reasoningSteps
-                ) ||
-                visual.reasoningSteps
-                  .length ===
-                  0
-              ) {
-                visual.reasoningSteps =
-                  [
-                    typeof scene.text ===
-                    "string"
-                      ? scene.text
-                      : "Evaluate the available approach.",
-
-                    typeof visual.operation ===
-                    "string"
-                      ? visual.operation
-                      : "Choose the best option.",
-                  ];
-              }
-
-              visual.reasoningSteps =
-                visual.reasoningSteps
-                  .map(
-                    (
-                      step:
-                        unknown
-                    ) =>
-                      String(
-                        step
-                      )
-                  )
-                  .filter(
-                    (
-                      step:
-                        string
-                    ) =>
-                      step.trim()
-                        .length >
-                      0
-                  )
-                  .slice(
-                    0,
-                    4
-                  );
-            }
-
-            /* =================================
-               CODE
-            ================================= */
-
-            let sceneCode:
-              string | undefined;
-
-            if (
-              isBugHunt &&
-              visual.kind ===
-                "code" &&
-              args.codeSnippet
-            ) {
-              sceneCode =
-                args.codeSnippet;
-            } else if (
-              typeof scene.code ===
-              "string"
-            ) {
-              sceneCode =
-                scene.code;
-            }
-
-            /* =================================
-               HIGHLIGHT
-            ================================= */
-
-            let highlightLine:
-              number | undefined;
-
-            if (
-  isBugHunt &&
-  args.codeSnippet &&
-  normalizedHighlightText
-) {
-  const codeLines =
-    args.codeSnippet.split("\n");
-
-  const wanted =
-    normalizedHighlightText.trim();
-
-              let matchIndex =
-                codeLines.findIndex(
-                  (
-                    line
-                  ) =>
-                    line.trim() ===
-                    wanted
-                );
-
-              if (
-                matchIndex ===
-                -1
-              ) {
-                matchIndex =
-                  codeLines.findIndex(
-                    (
-                      line
-                    ) => {
-                      const cleaned =
-                        line.trim();
-
-                      if (!cleaned) {
-                        return false;
-                      }
-
-                      return (
-                        cleaned.includes(
-                          wanted
-                        ) ||
-                        wanted.includes(
-                          cleaned
-                        )
-                      );
-                    }
-                  );
-              }
-
-              if (
-                matchIndex !==
-                -1
-              ) {
-                highlightLine =
-                  matchIndex +
-                  1;
-              }
-            }
-
-            if (
-              !isBugHunt &&
-              typeof scene.highlightLine ===
-                "number"
-            ) {
-              highlightLine =
-                scene.highlightLine;
-            }
-
-            if (
-              sceneCode &&
-              highlightLine !==
-                undefined
-            ) {
-              const lineCount =
-                sceneCode.split(
-                  "\n"
-                ).length;
-
-              if (
-                highlightLine <
-                  1 ||
-                highlightLine >
-                  lineCount
-              ) {
-                highlightLine =
-                  undefined;
-              }
-            }
-
-            /* =================================
-               RETURN SCENE
-            ================================= */
-
-            return {
-              type:
-                typeof scene.type ===
-                "string"
-                  ? scene.type
-                  : "reasoning",
-
-              title:
-                typeof scene.title ===
-                "string"
-                  ? scene.title
-                  : "Breaking it down",
-
-              text:
-                typeof scene.text ===
-                "string"
-                  ? scene.text
-                  : "",
-
-              code:
-                sceneCode,
-
-              highlightLine,
-
-             highlightText:
-  normalizedHighlightText,
-
-              takeaway:
-                typeof scene.takeaway ===
-                "string"
-                  ? scene.takeaway
-                  : undefined,
-
-              visual,
-            };
-          }
-        );
-
-      return {
-        summary:
-          parsed.summary,
-
-        steps:
-          parsed.steps.map(
-            (
-              step:
-                unknown
-            ) =>
-              String(
-                step
-              )
-          ),
-
-        scenes,
-      };
+      return sanitizeExplanation(
+        parsed,
+        questionType,
+        sourceCode ||
+          undefined
+      );
     },
   });

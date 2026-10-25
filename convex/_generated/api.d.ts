@@ -10,8 +10,10 @@
 
 import type * as aiExplanation from "../aiExplanation.js";
 import type * as aiQuestions from "../aiQuestions.js";
+import type * as aiVoice from "../aiVoice.js";
 import type * as answers from "../answers.js";
 import type * as gameLifecycle from "../gameLifecycle.js";
+import type * as http from "../http.js";
 import type * as players from "../players.js";
 import type * as powerupEvents from "../powerupEvents.js";
 import type * as powerups from "../powerups.js";
@@ -27,8 +29,10 @@ import type {
 declare const fullApi: ApiFromModules<{
   aiExplanation: typeof aiExplanation;
   aiQuestions: typeof aiQuestions;
+  aiVoice: typeof aiVoice;
   answers: typeof answers;
   gameLifecycle: typeof gameLifecycle;
+  http: typeof http;
   players: typeof players;
   powerupEvents: typeof powerupEvents;
   powerups: typeof powerups;

@@ -3,12 +3,21 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
 } from "react";
+
 
 import {
   speak,
   stopVoice,
 } from "../utils/voice";
+
+import {
+  playStreamingVoice,
+  stopGeneratedVoice,
+} from "../utils/generatedVoice";
+
+import "./AICoachAnimationExpressive.css";
 
 import {
   playSfx,
@@ -44,6 +53,7 @@ type ExplanationScene = {
   type: string;
   title: string;
   text: string;
+  narration?: string;
   code?: string;
   highlightLine?: number;
   highlightText?: string;
@@ -195,6 +205,43 @@ function findHighlightLine(
   return undefined;
 }
 
+function getSceneIcon(
+  kind?: string,
+  type?: string
+) {
+  const key =
+    kind ??
+    type ??
+    "reasoning";
+
+  switch (key) {
+    case "array":
+      return "📊";
+
+    case "pointers":
+      return "🎯";
+
+    case "hashmap":
+      return "🗂️";
+
+    case "stack":
+      return "🧱";
+
+    case "code":
+    case "bug_hunt":
+      return "🔎";
+
+    case "complexity":
+      return "⚡";
+
+    case "takeaway":
+      return "🏆";
+
+    default:
+      return "🧠";
+  }
+}
+
 /* ========================================
    MAIN COMPONENT
 ======================================== */
@@ -215,6 +262,16 @@ function AICoachAnimation({
     visible,
     setVisible,
   ] = useState(true);
+
+  const [
+    sceneBeat,
+    setSceneBeat,
+  ] = useState(0);
+
+  const [
+    voicePlaying,
+    setVoicePlaying,
+  ] = useState(false);
 
   /*
     Keep the latest values accessible
@@ -249,8 +306,47 @@ function AICoachAnimation({
   useEffect(() => {
     setCurrentScene(0);
     setVisible(true);
+    setSceneBeat(0);
   }, [
     scenes.length,
+  ]);
+
+  /*
+    Give every scene multiple visual beats so
+    the explanation feels alive while narration
+    is still playing instead of revealing one
+    static picture and waiting.
+  */
+  useEffect(() => {
+    setSceneBeat(0);
+
+    const timers = [
+      420,
+      980,
+      1580,
+      2280,
+    ].map(
+      (
+        delay,
+        index
+      ) =>
+        setTimeout(
+          () => {
+            setSceneBeat(
+              index + 1
+            );
+          },
+          delay
+        )
+    );
+
+    return () => {
+      timers.forEach(
+        clearTimeout
+      );
+    };
+  }, [
+    currentScene,
   ]);
 
   /* ========================================
@@ -305,10 +401,15 @@ function AICoachAnimation({
         )
     );
 
-    const narration =
+    const fallbackNarration =
       narrationParts.join(
         ". "
       );
+
+    const narration =
+      scene.narration?.trim() ||
+      fallbackNarration ||
+      scene.text;
 
     let advanceTimer:
       ReturnType<
@@ -320,14 +421,29 @@ function AICoachAnimation({
         typeof setTimeout
       > | undefined;
 
-    let finished = false;
+    let browserFallbackStarted =
+      false;
+
+    let cancelled =
+      false;
+
+    let finished =
+      false;
 
     function finishScene() {
-      if (finished) {
+      if (
+        finished ||
+        cancelled
+      ) {
         return;
       }
 
-      finished = true;
+      finished =
+        true;
+
+      setVoicePlaying(
+        false
+      );
 
       const latestScenes =
         scenesRef.current;
@@ -337,110 +453,174 @@ function AICoachAnimation({
         latestScenes.length -
           1;
 
-      /*
-        Final narration finished.
-        HostGamePage now owns the transition
-        into the next round.
-      */
+      if (isLastScene) {
+        void playSfx(
+          "complete"
+        );
 
-     if (isLastScene) {
-  void playSfx(
-    "complete"
-  );
+        advanceTimer =
+          setTimeout(
+            () => {
+              onCompleteRef
+                .current?.();
+            },
+            700
+          );
 
-  advanceTimer =
-    setTimeout(
-      () => {
-        onCompleteRef
-          .current?.();
-      },
-      900
-    );
-
-  return;
-}
-
-      /*
-        Otherwise fade out and show
-        the next explanation scene.
-      */
+        return;
+      }
 
       advanceTimer =
-  setTimeout(
-    () => {
-      void playSfx(
-        "whoosh"
-      );
-
-      setVisible(
-        false
-      );
-
-      transitionTimer =
         setTimeout(
           () => {
-            setCurrentScene(
-              (
-                previous
-              ) =>
-                previous +
-                1
+            void playSfx(
+              "whoosh"
             );
 
             setVisible(
-              true
+              false
             );
+
+            transitionTimer =
+              setTimeout(
+                () => {
+                  setCurrentScene(
+                    (
+                      previous
+                    ) =>
+                      previous +
+                      1
+                  );
+
+                  setVisible(
+                    true
+                  );
+                },
+                260
+              );
           },
-          350
+          280
         );
-    },
-    500
-  );
     }
 
-    /*
-      Allow entrance animation to start
-      before narration begins.
-    */
+    function startBrowserFallback() {
+      if (
+        cancelled ||
+        finished ||
+        browserFallbackStarted
+      ) {
+        return;
+      }
+
+      browserFallbackStarted =
+        true;
+
+      setVoicePlaying(
+        true
+      );
+
+      speak(
+        narration,
+        {
+          rate:
+            1.03,
+
+          pitch:
+            1.0,
+
+          onEnd:
+            () => {
+              finishScene();
+            },
+
+          onError:
+            (
+              error
+            ) => {
+              console.warn(
+                "Browser fallback voice failed:",
+                error
+              );
+
+              finishScene();
+            },
+        }
+      );
+    }
+
+    async function startStreamingNarration() {
+      try {
+        console.log(
+          "⚡ Starting streamed AI Coach voice"
+        );
+
+        await playStreamingVoice(
+          narration,
+          scene.type,
+          {
+            onStart:
+              () => {
+                if (
+                  !cancelled
+                ) {
+                  setVoicePlaying(
+                    true
+                  );
+                }
+              },
+
+            onEnd:
+              () => {
+                finishScene();
+              },
+
+            onError:
+              (
+                error
+              ) => {
+                console.warn(
+                  "Streamed AI Coach voice failed:",
+                  error
+                );
+
+                setVoicePlaying(
+                  false
+                );
+
+                startBrowserFallback();
+              },
+          }
+        );
+      } catch (error) {
+        console.warn(
+          "AI Coach streaming voice failed. Using browser fallback:",
+          error
+        );
+
+        setVoicePlaying(
+          false
+        );
+
+        startBrowserFallback();
+      }
+    }
 
     const startTimer =
       setTimeout(
         () => {
-          speak(
-            narration,
-            {
-              rate: 0.98,
-              pitch: 0.98,
-
-              onEnd:
-                () => {
-                  finishScene();
-                },
-
-              onError:
-                (
-                  error
-                ) => {
-                  console.warn(
-                    "AI Coach voice failed:",
-                    error
-                  );
-
-                  /*
-                    Don't permanently freeze
-                    the game if browser TTS
-                    genuinely fails.
-                  */
-
-                  finishScene();
-                },
-            }
-          );
+          void startStreamingNarration();
         },
-        500
+        100
       );
 
     return () => {
+      cancelled =
+        true;
+
+      setVoicePlaying(
+        false
+      );
+
       clearTimeout(
         startTimer
       );
@@ -459,6 +639,7 @@ function AICoachAnimation({
         );
       }
 
+      stopGeneratedVoice();
       stopVoice();
     };
   }, [
@@ -483,6 +664,12 @@ function AICoachAnimation({
 
   const visual =
     scene.visual;
+
+  const sceneIcon =
+    getSceneIcon(
+      visual?.kind,
+      scene.type
+    );
 
   const isBugHunt =
     questionType ===
@@ -519,13 +706,41 @@ function AICoachAnimation({
       {/* HEADER */}
 
       <div className="ai-video-header">
-        <div className="ai-avatar">
-          🤖
+        <div
+          className={`ai-avatar ai-avatar-expressive ${
+            voicePlaying
+              ? "ai-avatar-speaking"
+              : ""
+          }`}
+        >
+          <span>
+            {sceneIcon}
+          </span>
+
+          <div className="coach-voice-wave">
+            {[
+              0,
+              1,
+              2,
+              3,
+              4,
+            ].map(
+              (
+                bar
+              ) => (
+                <i
+                  key={
+                    bar
+                  }
+                />
+              )
+            )}
+          </div>
         </div>
 
         <div className="ai-header-copy">
           <p className="host-eyebrow">
-            AI COACH
+            AI COACH · AI-GENERATED VOICE
           </p>
 
           <strong>
@@ -597,6 +812,9 @@ function AICoachAnimation({
               operation={
                 visual?.operation
               }
+              beat={
+                sceneBeat
+              }
               bugMode
             />
           )}
@@ -615,6 +833,9 @@ function AICoachAnimation({
               }
               operation={
                 visual.operation
+              }
+              beat={
+                sceneBeat
               }
             />
           )}
@@ -638,6 +859,9 @@ function AICoachAnimation({
               operation={
                 visual.operation
               }
+              beat={
+                sceneBeat
+              }
             />
           )}
 
@@ -660,6 +884,9 @@ function AICoachAnimation({
               operation={
                 visual.operation
               }
+              beat={
+                sceneBeat
+              }
             />
           )}
 
@@ -676,6 +903,9 @@ function AICoachAnimation({
               operation={
                 visual.operation
               }
+              beat={
+                sceneBeat
+              }
             />
           )}
 
@@ -691,6 +921,9 @@ function AICoachAnimation({
               }
               operation={
                 visual.operation
+              }
+              beat={
+                sceneBeat
               }
             />
           )}
@@ -719,6 +952,9 @@ function AICoachAnimation({
               operation={
                 visual?.operation
               }
+              beat={
+                sceneBeat
+              }
             />
           )}
 
@@ -734,6 +970,9 @@ function AICoachAnimation({
               operation={
                 visual.operation
               }
+              beat={
+                sceneBeat
+              }
             />
           )}
 
@@ -746,6 +985,9 @@ function AICoachAnimation({
               steps={[
                 scene.text,
               ]}
+              beat={
+                sceneBeat
+              }
             />
           )}
 
@@ -757,6 +999,9 @@ function AICoachAnimation({
               scene.takeaway ??
               visual?.operation ??
               correctAnswer
+            }
+            beat={
+              sceneBeat
             }
           />
         )}
@@ -793,9 +1038,11 @@ function AICoachAnimation({
 function ReasoningVisual({
   steps,
   operation,
+  beat = 0,
 }: {
   steps: string[];
   operation?: string;
+  beat?: number;
 }) {
   const usableSteps =
     steps
@@ -809,8 +1056,18 @@ function ReasoningVisual({
         4
       );
 
+  const activeIndex =
+    Math.min(
+      beat,
+      Math.max(
+        0,
+        usableSteps.length -
+          1
+      )
+    );
+
   return (
-    <div className="coach-algorithm-stage">
+    <div className="coach-algorithm-stage coach-stage-expressive">
       <div className="coach-visual-title">
         REASONING
       </div>
@@ -820,54 +1077,65 @@ function ReasoningVisual({
           (
             step,
             index
-          ) => (
-            <div
-              className="coach-reasoning-chain"
-              key={
-                `${index}-${step}`
-              }
-            >
+          ) => {
+            const revealed =
+              index <=
+              beat;
+
+            const active =
+              index ===
+              activeIndex;
+
+            return (
               <div
-                className={`coach-reasoning-step ${
-                  index ===
-                  usableSteps.length -
-                    1
-                    ? "coach-reasoning-final"
-                    : ""
-                }`}
-                style={{
-                  animationDelay:
-                    `${index * 350}ms`,
-                }}
+                className="coach-reasoning-chain"
+                key={
+                  `${index}-${step}`
+                }
               >
-                <span className="coach-reasoning-number">
-                  {index + 1}
-                </span>
-
-                <strong>
-                  {step}
-                </strong>
-              </div>
-
-              {index <
-                usableSteps.length -
-                  1 && (
                 <div
-                  className="coach-reasoning-arrow"
-                  style={{
-                    animationDelay:
-                      `${
-                        index *
-                          350 +
-                        250
-                      }ms`,
-                  }}
+                  className={`coach-reasoning-step ${
+                    index ===
+                    usableSteps.length -
+                      1
+                      ? "coach-reasoning-final"
+                      : ""
+                  } ${
+                    revealed
+                      ? "coach-beat-revealed"
+                      : "coach-beat-hidden"
+                  } ${
+                    active
+                      ? "coach-beat-current"
+                      : ""
+                  }`}
                 >
-                  →
+                  <span className="coach-reasoning-number">
+                    {index + 1}
+                  </span>
+
+                  <strong>
+                    {step}
+                  </strong>
                 </div>
-              )}
-            </div>
-          )
+
+                {index <
+                  usableSteps.length -
+                    1 && (
+                  <div
+                    className={`coach-reasoning-arrow ${
+                      index <
+                      beat
+                        ? "coach-arrow-live"
+                        : "coach-beat-hidden"
+                    }`}
+                  >
+                    →
+                  </div>
+                )}
+              </div>
+            );
+          }
         )}
       </div>
 
@@ -875,6 +1143,9 @@ function ReasoningVisual({
         <OperationBanner
           operation={
             operation
+          }
+          active={
+            beat >= 2
           }
         />
       )}
@@ -891,12 +1162,14 @@ function CodeAnimation({
   highlightLine,
   highlightText,
   operation,
+  beat = 0,
   bugMode = false,
 }: {
   code: string;
   highlightLine?: number;
   highlightText?: string;
   operation?: string;
+  beat?: number;
   bugMode?: boolean;
 }) {
   const lines =
@@ -914,6 +1187,26 @@ function CodeAnimation({
     scanComplete,
     setScanComplete,
   ] = useState(false);
+
+  const liveLine =
+    highlightLine &&
+    beat >= 3
+      ? highlightLine
+      : Math.min(
+          lines.length,
+          Math.max(
+            1,
+            1 +
+              beat *
+                Math.max(
+                  1,
+                  Math.ceil(
+                    lines.length /
+                      4
+                  )
+                )
+          )
+        );
 
   useEffect(() => {
     setScanComplete(
@@ -987,6 +1280,10 @@ function CodeAnimation({
                   highlightLine ===
                   lineNumber;
 
+                const live =
+                  liveLine ===
+                  lineNumber;
+
                 return (
                   <div
                     key={
@@ -997,6 +1294,10 @@ function CodeAnimation({
                         ? bugMode
                           ? "ai-code-highlight ai-code-bug-highlight"
                           : "ai-code-highlight"
+                        : ""
+                    } ${
+                      live
+                        ? "coach-code-line-live"
                         : ""
                     }`}
                     style={{
@@ -1078,6 +1379,9 @@ function CodeAnimation({
           operation={
             operation
           }
+          active={
+            beat >= 2
+          }
         />
       )}
     </div>
@@ -1093,12 +1397,38 @@ function ArrayVisual({
   activeIndices = [],
   pointers = [],
   operation,
+  beat = 0,
 }: {
   values: string[];
   activeIndices?: number[];
   pointers?: Pointer[];
   operation?: string;
+  beat?: number;
 }) {
+  const focusCandidates =
+    activeIndices.length >
+    0
+      ? activeIndices
+      : values.map(
+          (
+            _,
+            index
+          ) => index
+        );
+
+  const focusIndex =
+    focusCandidates[
+      Math.min(
+        beat,
+        Math.max(
+          0,
+          focusCandidates.length -
+            1
+        )
+      )
+    ] ??
+    0;
+
   return (
     <div className="coach-algorithm-stage">
       <div className="coach-visual-title">
@@ -1120,6 +1450,10 @@ function ArrayVisual({
                 activeIndices.includes(
                   index
                 );
+
+              const focused =
+                index ===
+                focusIndex;
 
               const cellPointers =
                 pointers.filter(
@@ -1145,7 +1479,11 @@ function ArrayVisual({
                         pointer
                       ) => (
                         <div
-                          className="coach-pointer"
+                          className={`coach-pointer ${
+                            focused
+                              ? "coach-pointer-live"
+                              : ""
+                          }`}
                           key={
                             pointer.label
                           }
@@ -1167,8 +1505,13 @@ function ArrayVisual({
                       active
                         ? "coach-array-box-active"
                         : ""
+                    } ${
+                      focused
+                        ? "coach-array-box-focus-live"
+                        : ""
                     }`}
                   >
+                    <span className="coach-array-scan" />
                     <span className="coach-array-value">
                       {value}
                     </span>
@@ -1193,6 +1536,9 @@ function ArrayVisual({
           operation={
             operation
           }
+          active={
+            beat >= 2
+          }
         />
       )}
     </div>
@@ -1206,10 +1552,33 @@ function ArrayVisual({
 function HashMapVisual({
   entries,
   operation,
+  beat = 0,
 }: {
   entries: HashEntry[];
   operation?: string;
+  beat?: number;
 }) {
+  const targetIndex =
+    entries.findIndex(
+      (
+        entry
+      ) =>
+        entry.active
+    );
+
+  const focusIndex =
+    beat >= 3 &&
+    targetIndex >= 0
+      ? targetIndex
+      : Math.min(
+          beat,
+          Math.max(
+            0,
+            entries.length -
+              1
+          )
+        );
+
   return (
     <div className="coach-algorithm-stage">
       <div className="coach-visual-title">
@@ -1239,6 +1608,11 @@ function HashMapVisual({
               className={`coach-hash-row ${
                 entry.active
                   ? "coach-hash-row-active"
+                  : ""
+              } ${
+                index ===
+                focusIndex
+                  ? "coach-hash-row-live"
                   : ""
               }`}
               style={{
@@ -1273,6 +1647,9 @@ function HashMapVisual({
           operation={
             operation
           }
+          active={
+            beat >= 2
+          }
         />
       )}
     </div>
@@ -1286,10 +1663,27 @@ function HashMapVisual({
 function StackVisual({
   stack,
   operation,
+  beat = 0,
 }: {
   stack: string[];
   operation?: string;
+  beat?: number;
 }) {
+  const reversed =
+    [
+      ...stack,
+    ].reverse();
+
+  const liveIndex =
+    Math.min(
+      beat,
+      Math.max(
+        0,
+        reversed.length -
+          1
+      )
+    );
+
   return (
     <div className="coach-algorithm-stage">
       <div className="coach-visual-title">
@@ -1298,15 +1692,18 @@ function StackVisual({
 
       <div className="coach-stack-wrapper">
         <div className="coach-stack-container">
-          {[...stack]
-            .reverse()
-            .map(
+          {reversed.map(
               (
                 value,
                 index
               ) => (
                 <div
-                  className="coach-stack-box"
+                  className={`coach-stack-box ${
+                    index ===
+                    liveIndex
+                      ? "coach-stack-box-live"
+                      : ""
+                  }`}
                   key={
                     `${index}-${value}`
                   }
@@ -1327,6 +1724,9 @@ function StackVisual({
           operation={
             operation
           }
+          active={
+            beat >= 2
+          }
         />
       )}
     </div>
@@ -1340,9 +1740,11 @@ function StackVisual({
 function ComplexityVisual({
   reasoningSteps,
   operation,
+  beat = 0,
 }: {
   reasoningSteps?: string[];
   operation?: string;
+  beat?: number;
 }) {
   return (
     <div className="coach-algorithm-stage">
@@ -1360,11 +1762,20 @@ function ComplexityVisual({
           operation={
             operation
           }
+          beat={
+            beat
+          }
         />
       ) : (
         <>
           <div className="coach-complexity">
-            <div className="coach-complexity-before">
+            <div
+              className={`coach-complexity-before ${
+                beat >= 1
+                  ? "coach-complexity-before-live"
+                  : ""
+              }`}
+            >
               <span>
                 Before
               </span>
@@ -1374,11 +1785,23 @@ function ComplexityVisual({
               </strong>
             </div>
 
-            <div className="coach-complexity-transition">
+            <div
+              className={`coach-complexity-transition ${
+                beat >= 2
+                  ? "coach-complexity-arrow-live"
+                  : ""
+              }`}
+            >
               →
             </div>
 
-            <div className="coach-complexity-after">
+            <div
+              className={`coach-complexity-after ${
+                beat >= 3
+                  ? "coach-complexity-after-live"
+                  : ""
+              }`}
+            >
               <span>
                 Optimized
               </span>
@@ -1394,6 +1817,9 @@ function ComplexityVisual({
               operation={
                 operation
               }
+              active={
+                beat >= 3
+              }
             />
           )}
         </>
@@ -1408,11 +1834,45 @@ function ComplexityVisual({
 
 function TakeawayVisual({
   takeaway,
+  beat = 0,
 }: {
   takeaway: string;
+  beat?: number;
 }) {
   return (
-    <div className="coach-takeaway">
+    <div
+      className={`coach-takeaway coach-takeaway-expressive ${
+        beat >= 1
+          ? "coach-takeaway-live"
+          : ""
+      }`}
+    >
+      <div className="coach-confetti" aria-hidden="true">
+        {Array.from(
+          {
+            length:
+              10,
+          }
+        ).map(
+          (
+            _,
+            index
+          ) => (
+            <span
+              key={
+                index
+              }
+              style={
+                {
+                  "--spark":
+                    index,
+                } as
+                  CSSProperties
+              }
+            />
+          )
+        )}
+      </div>
       <div className="coach-check">
         ✓
       </div>
@@ -1436,11 +1896,19 @@ function TakeawayVisual({
 
 function OperationBanner({
   operation,
+  active = false,
 }: {
   operation: string;
+  active?: boolean;
 }) {
   return (
-    <div className="coach-operation-banner">
+    <div
+      className={`coach-operation-banner ${
+        active
+          ? "coach-operation-live"
+          : ""
+      }`}
+    >
       <span className="coach-operation-icon">
         ⚡
       </span>

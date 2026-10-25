@@ -179,6 +179,11 @@ export const setExplanation =
             text:
               v.string(),
 
+            narration:
+              v.optional(
+                v.string()
+              ),
+
             code:
               v.optional(
                 v.string()
